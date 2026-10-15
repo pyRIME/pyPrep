@@ -219,14 +219,23 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
 
 
-def run_batchruntomo(recon_dir: Path, root: str, directive_file: Path, rs: ReconSettings,
-                     log: Callable[[str], None] = print, cancel: threading.Event | None = None,
-                     start: float | None = None, end: float | None = None) -> int:
+def imod_command(name: str, args) -> str:
+    """Command line that runs IMOD's ``bin/<name>.cmd`` wrapper through cmd.exe.
+
+    ``cmd /c`` strips the outer quotes of a command line holding more than one quoted
+    string, which cuts "C:\\Program Files\\IMOD\\..." at the space as soon as any argument
+    is quoted (a path with a space). With ``/s`` and one pair of quotes around the whole
+    command, cmd removes only that pair."""
     d = imod_dir()
     if d is None:
         raise RuntimeError("IMOD not found")
-    args = ["cmd.exe", "/d", "/c", str(d / "bin" / "batchruntomo.cmd"),
-            "-DirectiveFile", str(directive_file), "-RootName", root,
+    return f'cmd.exe /d /s /c ""{d / "bin" / f"{name}.cmd"}" {subprocess.list2cmdline([str(a) for a in args])}"'
+
+
+def run_batchruntomo(recon_dir: Path, root: str, directive_file: Path, rs: ReconSettings,
+                     log: Callable[[str], None] = print, cancel: threading.Event | None = None,
+                     start: float | None = None, end: float | None = None) -> int:
+    args = ["-DirectiveFile", str(directive_file), "-RootName", root,
             "-CurrentLocation", str(recon_dir), "-CPUMachineList", str(max(1, rs.cpus)),
             "-NiceValue", "0", "-EtomoDebug", "0"]
     if rs.use_gpu:
@@ -235,8 +244,9 @@ def run_batchruntomo(recon_dir: Path, root: str, directive_file: Path, rs: Recon
         args += ["-StartingStep", f"{start:g}"]
     if end is not None:
         args += ["-EndingStep", f"{end:g}"]
-    log("Running: batchruntomo " + " ".join(args[4:]))
-    proc = subprocess.Popen(args, cwd=str(recon_dir), env=_imod_env(), stdout=subprocess.PIPE,
+    command = imod_command("batchruntomo", args)
+    log("Running: batchruntomo " + " ".join(args))
+    proc = subprocess.Popen(command, cwd=str(recon_dir), env=_imod_env(), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1,
                             creationflags=subprocess.CREATE_NO_WINDOW)
     watcher = None

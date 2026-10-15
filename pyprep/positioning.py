@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -137,14 +138,22 @@ def _communicate_cancellable(proc, stdin, cancel):
     return result.get("out", ""), None
 
 
+def _com_args(line: str) -> list[str]:
+    """Arguments of a ``$program ...`` line of an IMOD .com file: quotes removed
+    (batchruntomo quotes file names), backslashes kept as in Windows paths."""
+    lex = shlex.shlex(line.lstrip("$"), posix=True)
+    lex.whitespace_split, lex.escape = True, ""
+    return list(lex)[1:]
+
+
 def run_trimvol(recon_dir: Path, log: Callable[[str], None] = print) -> None:
     """Re-run the trimvol command batchruntomo wrote into trimvol.com (rotation to Z slices)."""
     com = recon_dir / "trimvol.com"
     line = next((l.strip() for l in com.read_text().splitlines() if l.strip().startswith("$trimvol")), None)
     if line is None:
         raise RuntimeError("trimvol.com has no $trimvol command")
-    args = line[1:].split()[1:]
-    r = subprocess.run(["cmd.exe", "/d", "/c", str(_exe("trimvol.cmd")), *args], cwd=str(recon_dir),
+    args = _com_args(line)
+    r = subprocess.run(imod.imod_command("trimvol", args), cwd=str(recon_dir),
                        env=imod._imod_env(), capture_output=True, text=True,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode != 0:
@@ -285,11 +294,13 @@ def apply_positioning(recon_dir, root: str, corr: Correction, margin_px: int,
     tc.set("XAXISTILT", geom["XAXISTILT"])
     tc.set("SHIFT", f"{geom['SHIFT'][0]} {geom['SHIFT'][1]}")
     tc.set("THICKNESS", geom["THICKNESS"])
-    tc.write()
-    log("tilt.com: " + ", ".join(f"{k} {v}" for k, v in geom.items()))
     t0 = time.perf_counter()
     run_tilt(recon_dir, tc, log, cancel)
     run_trimvol(recon_dir, log)
+    # Only now: the correction is relative to the tilt.com the trial was built from, so writing
+    # it before a failed tilt/trimvol would make a retried Apply add the correction twice.
+    tc.write()
+    log("tilt.com: " + ", ".join(f"{k} {v}" for k, v in geom.items()))
     log(f"Tomogram rebuilt with the new positioning ({time.perf_counter() - t0:.0f} s)")
     return geom
 

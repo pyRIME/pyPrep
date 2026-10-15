@@ -1,10 +1,17 @@
 """Tomogram positioning: tilt.com editing and the geometry of the correction."""
 
 import math
+import sys
+from pathlib import PureWindowsPath
 
+import numpy as np
 import pytest
 
-from pyprep import positioning as P
+from pyprep import imod, positioning as P
+from pyprep.io import mrc
+
+needs_imod = pytest.mark.skipif(sys.platform != "win32" or imod.imod_dir() is None,
+                                reason="needs IMOD for Windows")
 
 TILT_COM = """# Command file to run Tilt
 #
@@ -113,3 +120,50 @@ def test_apply_positioning_writes_tiltcom(tmp_path, monkeypatch):
     assert (tmp_path / "tilt.com.pyprep_orig").read_text() == TILT_COM
     P.restore_original(tmp_path, log=lambda s: None)
     assert (tmp_path / "tilt.com").read_text() == TILT_COM
+
+
+def test_apply_positioning_keeps_tiltcom_when_imod_fails(tmp_path, monkeypatch):
+    # the correction is relative to the current tilt.com: a retry after a failure must not add it twice
+    (tmp_path / "tilt.com").write_text(TILT_COM)
+    monkeypatch.setattr(P, "run_tilt", lambda d, tc, log=None, cancel=None: None)
+
+    def trimvol_fails(d, log=None):
+        raise RuntimeError("trimvol failed")
+    monkeypatch.setattr(P, "run_trimvol", trimvol_fails)
+    with pytest.raises(RuntimeError, match="trimvol failed"):
+        P.apply_positioning(tmp_path, "TS", P.Correction(1.5, -2.0, -7.3, 100), margin_px=10, log=lambda s: None)
+    assert (tmp_path / "tilt.com").read_text() == TILT_COM
+
+
+def test_com_args_strip_quotes():
+    # batchruntomo writes trimvol.com with quoted file names
+    assert P._com_args('$trimvol -f -rx "TS_full_rec.mrc" "TS_rec.mrc"') == ["-f", "-rx", "TS_full_rec.mrc", "TS_rec.mrc"]
+    assert P._com_args(r'$trimvol -rx "D:\My data\TS_full_rec.mrc" out.mrc') == ["-rx", r"D:\My data\TS_full_rec.mrc",
+                                                                                  "out.mrc"]
+
+
+def test_imod_command_keeps_program_files_path(monkeypatch):
+    # plain "cmd /c" cut "C:\Program Files" at the space whenever an argument was quoted
+    monkeypatch.setattr(imod, "imod_dir", lambda: PureWindowsPath(r"C:\Program Files\IMOD"))
+    assert imod.imod_command("trimvol", ["-rx", r"D:\My data\a.mrc", "b.mrc"]) == \
+        r'cmd.exe /d /s /c ""C:\Program Files\IMOD\bin\trimvol.cmd" -rx "D:\My data\a.mrc" b.mrc"'
+
+
+@needs_imod
+def test_trimvol_runs_in_folder_with_space(tmp_path):
+    d = tmp_path / "with space"
+    d.mkdir()
+    mrc.write_mrc(d / "TS_full_rec.mrc", np.random.rand(16, 48, 64).astype(np.float32))
+    (d / "trimvol.com").write_text('$trimvol -f -rx "TS_full_rec.mrc" "TS_rec.mrc"\n')
+    P.run_trimvol(d, log=lambda s: None)
+    assert mrc.read_mrc(d / "TS_rec.mrc").shape == (48, 16, 64)      # -rx swaps Y and Z
+
+
+@needs_imod
+def test_batchruntomo_starts_from_folder_with_space(tmp_path):
+    d = tmp_path / "with space"
+    d.mkdir()
+    lines = []
+    imod.run_batchruntomo(d, "TS", d / "missing.adoc", imod.ReconSettings(cpus=1), log=lines.append, end=0)
+    text = "\n".join(lines)
+    assert "is not recognized" not in text and "does not exist" in text    # batchruntomo itself ran
