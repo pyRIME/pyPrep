@@ -127,7 +127,7 @@ install.bat
 Delete the pyPrep folder and the two **pyPrep** shortcuts (Desktop, Start menu).
 pyPrep also stores window layout and last-used settings in the Windows registry
 (`HKEY_CURRENT_USER\Software\pyPrep`), saved presets in `%APPDATA%\pyPrep`,
-and a startup error log (if any) in `%LOCALAPPDATA%\pyPrep`.
+and its startup error and crash logs in `%LOCALAPPDATA%\pyPrep`.
 
 ## Manual installation
 

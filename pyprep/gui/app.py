@@ -368,10 +368,8 @@ class MainWindow(QMainWindow):
             self.gallery.set_output(self.top.output.path())
 
     def open_positioning(self, recon_dir: str, root: str):
-        from .positioning_dialog import PositioningDialog
-        dlg = PositioningDialog(recon_dir, root, log=self.append_log, parent=self)
-        dlg.tomogram_updated.connect(self._tomogram_updated)
-        dlg.exec()
+        from .positioning_dialog import open_dialog
+        open_dialog(recon_dir, root, self, log=self.append_log, on_updated=self._tomogram_updated)
 
     def _tomogram_updated(self, recon_dir: str):
         self.results.load_series(Path(recon_dir).parent, prefer="tomo")

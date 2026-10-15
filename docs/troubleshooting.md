@@ -10,6 +10,10 @@
   ```
 - **"pyPrep could not start"** message: the details are in
   `%LOCALAPPDATA%\pyPrep\startup_error.log`.
+- **pyPrep closes suddenly, without a message**: the Python stack of every
+  thread at the moment of the crash is in `%LOCALAPPDATA%\pyPrep\crash.log`
+  (the last block, after the latest "pyPrep ... started" line). Include it
+  when reporting the problem.
 - **"pyPrep is not installed yet"**: run `install.bat` first
   ([Installation](installation.md)).
 - **Slow first start (~30 s)**: Python loads PyTorch and Qt from disk; later

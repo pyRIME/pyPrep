@@ -100,6 +100,26 @@ def _error_log_path() -> Path:
     return base / "startup_error.log"
 
 
+_crash_log = None      # kept open for the life of the process: faulthandler writes to its descriptor
+
+
+def enable_crash_log() -> Path | None:
+    """A native crash (access violation in Qt, PySide or an extension) ends the process with no
+    Python traceback; faulthandler then writes the Python stack of every thread to crash.log."""
+    global _crash_log
+    import faulthandler
+    try:
+        path = _error_log_path().with_name("crash.log")
+        mode = "a" if path.exists() and path.stat().st_size < 1_000_000 else "w"
+        _crash_log = open(path, mode, encoding="utf-8")
+        _crash_log.write(f"--- pyPrep {__version__} started {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        _crash_log.flush()
+        faulthandler.enable(file=_crash_log, all_threads=True)
+        return path
+    except OSError:
+        return None
+
+
 def set_app_identity(app) -> None:
     """Window/taskbar icon; on Windows also an AppUserModelID so the taskbar shows
     pyPrep's icon instead of Python's."""
@@ -117,6 +137,7 @@ def set_app_identity(app) -> None:
 
 def main() -> int:
     t0 = time.perf_counter()
+    enable_crash_log()
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("pyPrep")
     set_app_identity(app)

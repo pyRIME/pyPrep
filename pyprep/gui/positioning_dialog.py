@@ -22,6 +22,44 @@ class _Bridge(QObject):
     log = Signal(str)
 
 
+# Run on the worker thread: plain values only, no widgets.
+def _refresh_deconv(recon_dir: Path, log) -> None:
+    """The deconvolved tomogram must follow the rebuilt one."""
+    from .. import deconv
+    try:
+        deconv.refresh(recon_dir, log=log)
+    except Exception as e:
+        log(f"Deconvolution not updated: {e}")
+
+
+def _record(recon_dir: Path, geom, corr, margin_nm) -> None:
+    """Note the positioning in pyprep_recon.json and refresh the gallery thumbnail."""
+    j = recon_dir / "pyprep_recon.json"
+    try:
+        rec = json.loads(j.read_text(encoding="utf-8"))
+        rec["positioning"] = None if geom is None else {"tilt_com": geom, "margin_nm": margin_nm,
+                                                       "specimen_px": corr.thickness_px}
+        j.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+    try:
+        from ..thumbs import series_thumbnail
+        series_thumbnail(recon_dir.parent, force=True)
+    except Exception:
+        pass
+
+
+def open_dialog(recon_dir, root: str, parent, log=None, on_updated=None) -> None:
+    """Show the positioning dialog modally, then destroy it on the GUI thread.
+
+    Without the explicit delete the main window (its parent) keeps every closed dialog alive."""
+    dlg = PositioningDialog(recon_dir, root, log=log, parent=parent)
+    if on_updated is not None:
+        dlg.tomogram_updated.connect(on_updated)
+    dlg.exec()
+    dlg.deleteLater()
+
+
 class PositioningDialog(QDialog):
     tomogram_updated = Signal(str)        # recon_dir
 
@@ -33,6 +71,7 @@ class PositioningDialog(QDialog):
         self._log_cb = log
         self.views = None
         self._busy = False
+        self._worker: threading.Thread | None = None
         self._bridge = _Bridge(self)
         self._bridge.done.connect(self._on_done)
         self._bridge.log.connect(self._log)
@@ -149,6 +188,11 @@ class PositioningDialog(QDialog):
         self.btn_restore.setEnabled(not self._busy and (self.recon_dir / "tilt.com.pyprep_orig").exists())
 
     def _run(self, name, fn):
+        """Run ``fn`` on a worker thread; its result (or exception) arrives in ``_on_done``.
+
+        ``fn`` must not hold the dialog or any widget - read widget values before starting.
+        Together with ``reject`` refusing to close while a worker runs, this keeps the dialog
+        from being destroyed on the worker thread (a Qt use-after-free that crashed pyPrep)."""
         self._busy = True
         self._set_enabled()
         bridge = self._bridge
@@ -159,14 +203,24 @@ class PositioningDialog(QDialog):
             except Exception as e:
                 bridge.done.emit(name, e)
 
-        threading.Thread(target=work, name=f"pyprep-positioning-{name}", daemon=True).start()
+        self._worker = threading.Thread(target=work, name=f"pyprep-positioning-{name}", daemon=True)
+        self._worker.start()
+
+    def reject(self):
+        """Close button, Esc and the window's X - refused while IMOD is still working."""
+        if self._busy:
+            self.status.setText("Still working - wait until it has finished before closing.")
+            return
+        if self._worker is not None:
+            self._worker.join(5)                 # has delivered its result and is exiting
+        super().reject()
 
     # ------------------------------------------------------------------ actions
     def make_trial(self):
         thick_px = int(round(self.trial_nm.value() / self._pixel_nm()))
         self._log(f"Making trial tomogram ({self.trial_nm.value():.0f} nm)…")
-        log = self._bridge.log.emit
-        self._run("trial", lambda: P.trial_views(P.make_trial(self.recon_dir, self.root, thick_px, log)))
+        log, recon_dir, root = self._bridge.log.emit, self.recon_dir, self.root
+        self._run("trial", lambda: P.trial_views(P.make_trial(recon_dir, root, thick_px, log)))
 
     def auto_lines(self):
         if not self.views:
@@ -216,14 +270,15 @@ class PositioningDialog(QDialog):
         if c.thickness_px < 4:
             QMessageBox.warning(self, "pyPrep", "The top and bottom lines are too close together.")
             return
-        margin_px = int(round(self.margin.value() / self._pixel_nm()))
-        log = self._bridge.log.emit
+        margin_nm = self.margin.value()
+        margin_px = int(round(margin_nm / self._pixel_nm()))
+        log, recon_dir, root = self._bridge.log.emit, self.recon_dir, self.root
         self._log("Rebuilding the tomogram…")
 
         def work():
-            geom = P.apply_positioning(self.recon_dir, self.root, c, margin_px, log)
-            self._refresh_deconv(log)
-            self._record(geom, c)
+            geom = P.apply_positioning(recon_dir, root, c, margin_px, log)
+            _refresh_deconv(recon_dir, log)
+            _record(recon_dir, geom, c, margin_nm)
             return geom
         self._run("apply", work)
 
@@ -231,38 +286,14 @@ class PositioningDialog(QDialog):
         if QMessageBox.question(self, "pyPrep", "Rebuild the tomogram with the original batchruntomo "
                                                 "positioning?") != QMessageBox.Yes:
             return
-        log = self._bridge.log.emit
+        log, recon_dir = self._bridge.log.emit, self.recon_dir
         self._log("Restoring the original positioning…")
 
         def work():
-            P.restore_original(self.recon_dir, log)
-            self._refresh_deconv(log)
-            self._record(None, None)
+            P.restore_original(recon_dir, log)
+            _refresh_deconv(recon_dir, log)
+            _record(recon_dir, None, None, None)
         self._run("restore", work)
-
-    def _refresh_deconv(self, log):
-        """The deconvolved tomogram must follow the rebuilt one."""
-        from .. import deconv
-        try:
-            deconv.refresh(self.recon_dir, log=log)
-        except Exception as e:
-            log(f"Deconvolution not updated: {e}")
-
-    def _record(self, geom, corr):
-        """Note the positioning in pyprep_recon.json and refresh the gallery thumbnail."""
-        j = self.recon_dir / "pyprep_recon.json"
-        try:
-            rec = json.loads(j.read_text(encoding="utf-8"))
-            rec["positioning"] = None if geom is None else {"tilt_com": geom, "margin_nm": self.margin.value(),
-                                                           "specimen_px": corr.thickness_px}
-            j.write_text(json.dumps(rec, indent=1), encoding="utf-8")
-        except (OSError, ValueError):
-            pass
-        try:
-            from ..thumbs import series_thumbnail
-            series_thumbnail(self.recon_dir.parent, force=True)
-        except Exception:
-            pass
 
     def _on_done(self, name, result):
         self._busy = False
