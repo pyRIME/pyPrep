@@ -77,6 +77,7 @@ The exit code is 0 if every series succeeded, 1 otherwise.
 | `--gain-mode {auto,multiply,divide}` | auto | auto = divide for `.gain`/EER, multiply otherwise |
 | `--gain-rotate {0,90,180,270}` | 0 | rotate the reference counter-clockwise |
 | `--gain-flip {none,x,y}` | none | flip after rotating (x = left-right, y = up-down) |
+| `--invert-y {auto,yes,no}` | auto | invert the aligned images in Y; auto = for Tomography 5 data, which stores images upside down (otherwise its tomograms are mirror images) |
 
 **Frame alignment**
 
@@ -116,7 +117,7 @@ The exit code is 0 if every series succeeded, 1 otherwise.
 | `--ctf-range LOW HIGH` | `30 8` | fit range in Å |
 | `--defocus-range MIN MAX` | `0.5 12` | defocus search range in µm |
 | `--no-ctf-correct` | | do not phase-flip in IMOD |
-| `--handedness {auto,keep,flip}` | auto | auto = rotate the tilt axis by 180° when the CTF shows inverted handedness |
+| `--handedness {auto,keep,flip}` | auto | direction of the tilt axis: auto = rotate it by 180° when the CTF defocus gradient disagrees with it |
 | `--no-deconv` | | do not write the deconvolved tomogram |
 | `--deconv-strength S` | 1.0 | deconvolution strength |
 | `--deconv-falloff F` | 1.0 | SNR falloff |

@@ -117,7 +117,8 @@ def test_eer_tilt_series_through_pipeline(tmp_path):
     s.recon.enabled = False
     s.output.bin_levels = [1]
     s.motion.align_bin = 2
-    s.input = InputSettings(eer_fractions=6, gain_path=str(tmp_path / "ref.gain"))
+    # As stored, so the gain pattern is compared in its own orientation (Y inversion: test_handedness).
+    s.input = InputSettings(eer_fractions=6, gain_path=str(tmp_path / "ref.gain"), invert_y="no")
     rec = process_series(ts, s, tmp_path / "out")
     assert rec["status"] == "complete"
     for t in rec["tilts"]:

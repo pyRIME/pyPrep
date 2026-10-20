@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QDial
                                QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from .. import __version__, gpu, imod, qc
-from ..pipeline import estimate_output_bytes, is_complete, recon_complete
+from ..pipeline import estimate_output_bytes, image_frame, is_complete, recon_complete
 from ..settings import ProcessingSettings
 from ..tiltseries import TiltSeries, find_mdocs, load_tilt_series
 from . import theme
@@ -692,7 +692,7 @@ class MainWindow(QMainWindow):
         _, ts = self._current_series()
         s = self.forms.get_settings()
         pix = (ts.pixel_size if ts else 1.0) * s.recon.bin
-        axis = (ts.tilt_axis if ts and ts.tilt_axis is not None else 0.0)
+        axis = image_frame(ts, s)["tilt_axis"] if ts else 0.0         # axis of the stacks pyPrep writes
         dirs = imod.build_directives(pix, axis, ts.voltage if ts else 300, s.recon)
         text = (f"# {'Series ' + ts.name if ts else 'No series selected - generic values'}: "
                 f"bin {s.recon.bin} stack, {pix:.2f} A/px, tilt axis {axis:.2f}\n"

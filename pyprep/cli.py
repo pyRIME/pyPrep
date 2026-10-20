@@ -94,6 +94,8 @@ def cmd_run(args) -> int:
         inp.gain_rotate = args.gain_rotate
     if args.gain_flip:
         inp.gain_flip = args.gain_flip
+    if args.invert_y:
+        inp.invert_y = args.invert_y
     r = settings.recon
     if args.reconstruct:
         r.enabled = True
@@ -272,6 +274,9 @@ def main(argv=None) -> int:
     p.add_argument("--gain-mode", choices=["auto", "multiply", "divide"])
     p.add_argument("--gain-rotate", type=int, choices=[0, 90, 180, 270], help="rotate gain CCW (degrees)")
     p.add_argument("--gain-flip", choices=["none", "x", "y"], help="flip gain after rotation")
+    p.add_argument("--invert-y", choices=["auto", "yes", "no"],
+                   help="invert the aligned images in Y; auto (default): for Tomography 5 data, which stores "
+                        "images upside down (without it, Tomo5 tomograms are mirror images)")
     p.add_argument("--align-bin", type=int, help="binning used for measuring shifts (default 4)")
     p.add_argument("--bfactor", type=float, help="B-factor for alignment in A^2 (default 500)")
     p.add_argument("--cpu", action="store_true", help="do not use the GPU")
@@ -285,8 +290,8 @@ def main(argv=None) -> int:
     add_ctf_args(p)
     p.add_argument("--no-ctf-correct", action="store_true", help="do not phase-flip (IMOD ctfphaseflip)")
     p.add_argument("--handedness", choices=["auto", "keep", "flip"],
-                   help="auto (default): rotate the tilt axis by 180 deg when the CTF shows inverted "
-                        "handedness; keep: as recorded; flip: always rotate")
+                   help="tilt axis direction. auto (default): rotate it by 180 deg when the CTF defocus "
+                        "gradient disagrees with it; keep: as recorded; flip: always rotate")
     p.add_argument("--no-deconv", action="store_true", help="do not write a deconvolved tomogram")
     p.add_argument("--deconv-strength", type=float, help="deconvolution strength (default 1.0)")
     p.add_argument("--deconv-falloff", type=float, help="deconvolution SNR falloff (default 1.0)")

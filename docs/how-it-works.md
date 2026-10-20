@@ -23,8 +23,17 @@ and reconstruction uses IMOD.
 
 - **mdoc**: both dialects are parsed. The tilt-axis angle comes from SerialEM's
   title line (`Tilt axis angle = …`) or from Tomo5's per-section
-  `RotationAngle`. Tomo5's `TiltAxisAngle` header value uses a different
-  convention, and etomo does not use it.
+  `RotationAngle`. Tomo5's `TiltAxisAngle` header value is the same axis for
+  the upright image, measured from X (176.73° there is 86.73° from Y in IMOD's
+  convention); etomo does not use it.
+- **Image orientation**: Tomography 5 stores its images upside down. IMOD
+  reports its own stacks as "inverted in Y" (FEI extended header); the fraction
+  files carry no such header but are stored the same way. For Tomo5 series
+  pyPrep reverses the rows of every aligned image and mirrors the recorded axis
+  with them (*a* → 180° − *a*, since IMOD measures the axis from Y). Stacks, CTF,
+  alignment and tomograms are then in the physical orientation and follow
+  IMOD's conventions (see *Handedness* below). Frame shifts in `_motion.csv`
+  and `_pyprep.json` stay in the coordinates of the raw movies.
 - **Fraction files** are matched to tilts by the file name in `SubFramePath`.
   The match is case-insensitive, because Tomo5 writes `Fractions` in the mdoc
   and `fractions` on disk. Tomo5-style acquisition numbers are a fallback.
@@ -114,9 +123,9 @@ IMOD ctfplotter, but no code.
 
   *s* = +1 is IMOD's convention: in the aligned stack, with the tilt axis
   vertical, the right side is more underfocused at positive tilt angles.
-  Otherwise the tomogram would be a mirror image. By default pyPrep then
-  corrects the handedness (see below). With *Keep as recorded* it instead
-  sets ctfphaseflip's `InvertTiltAngles`.
+  *s* = −1 means the tilt axis is 180° off. By default pyPrep then rotates it
+  (see *Handedness* below). With *Keep as recorded* it instead sets
+  ctfphaseflip's `InvertTiltAngles`.
 - **Fit resolution.** The tiles' profiles are rescaled in *k* to the central
   defocus and averaged. The fit resolution is where the local correlation with
   the model (±1 ring) drops below 0.3.
@@ -126,7 +135,8 @@ IMOD ctfplotter, but no code.
 - IMOD ctfplotter (auto-fit per view, `-invert`) and pyPrep agree to 36 nm RMS
   (mean difference −10 nm).
 - Without `-invert`, ctfplotter's fits drift with tilt angle and fail on two
-  views. pyPrep chose the inverted handedness in 26 of 26 high tilts.
+  views. pyPrep chose the inverted handedness in 26 of 26 high tilts. (These
+  were Tomo5 images as stored, i.e. upside down; see *Handedness*.)
 - pyPrep's specimen tilt offset was −7.6°. tiltalign independently found the
   same offset between the raw and aligned tilt angles.
 - On synthetic images with a known gradient, defocus is recovered to within
@@ -142,29 +152,48 @@ IMOD ctfplotter, but no code.
    by angle;
 4. continues from step 10.
 
-**Handedness correction.** IMOD's documentation says that when
-ctfphaseflip needs `InvertTiltAngles`, the reconstruction has inverted
-handedness. So a gradient opposite to IMOD's convention means the tomogram is
-a mirror image.
+**Handedness.** Two separate things decide whether a tomogram has the
+specimen's hand.
 
-With *Handedness: Automatic*, pyPrep then passes the tilt axis rotated by 180°
-to batchruntomo. Rotating the axis reverses the sense of rotation relative to
-the specimen, which makes both the reconstruction's handedness and the defocus
-gradient right, so `InvertTiltAngles` is no longer needed. The decision (with
-its reason) is stored under `handedness` in `_pyprep.json`, and written into
-the stacks' mdoc titles.
+1. *Image orientation.* A tomogram has the hand of the images it is built
+   from. Images stored mirrored give a mirror-image tomogram, whatever the
+   tilt geometry. Tomography 5 stores its images upside down, so pyPrep
+   inverts them in Y (see *Reading the data*; setting *Image orientation*,
+   stored as `image_frame` in `_pyprep.json`).
+2. *Tilt-axis direction.* The CTF defocus gradient fixes the direction of
+   the tilt axis relative to the images. If it disagrees with the recorded
+   axis (at least 80 % of at least 4 tilts beyond 20°), the axis is 180° off.
+   With *Handedness: Automatic*, pyPrep then passes the axis rotated by 180°
+   to batchruntomo, so `InvertTiltAngles` is not needed. The decision (with
+   its reason) is stored under `handedness` in `_pyprep.json`, and written into
+   the stacks' mdoc titles.
 
-On the K3 test series (Tomo5, recorded axis 86.2°, corrected −93.8°):
+The defocus gradient cannot tell the two apart. Images stored mirrored also
+show an inverted gradient, and rotating the axis then makes the gradient
+agree while the tomogram stays a mirror image. Earlier pyPrep versions took
+every inverted gradient for an axis error. They rotated the axis of Tomo5 data
+(e.g. 86.2° → −93.8° on the K3 test series), and their Tomo5 tomograms are
+mirror images. The point-mirror relation reported for that series (0.95 after
+a 180° rotation in XY) was a consistency check, not a test of the hand.
 
-- A CTF fit against the corrected axis follows IMOD's convention in 26 of 26
-  high tilts.
-- The corrected tomogram matched the uncorrected one only after rotating it
-  180° in XY (correlation 0.95).
-- Slabs matched the uncorrected slab from the *opposite* side of the centre
-  (0.95) rather than the same side (0.72).
+**Verification.** *C. difficile* CD1215 lamellae, Krios / K3 / Tomography
+5.27, 10.48 Å/px, 70S ribosome reference EMD-50855 (a 2.3 Å map; the template
+matches it as-is, CC 0.951 against 0.850 for any mirrored axis order):
 
-Together these show the corrected tomogram is the point mirror of the
-uncorrected one.
+- With the old rule (images as stored, axis rotated to −86.73°):
+  - template matching found 775 ribosomes with the *mirrored* 70S and 7 with
+    the correct one;
+  - gold-standard subtomogram averaging of 765 particles, with a global search
+    from both starting hands, converged on the mirrored 70S (final-map CC 0.217
+    and 0.216, against 0.179 and 0.137). A synthetic control kept the correct
+    hand.
+- With the images inverted in Y:
+  - the recorded axis, mirrored to 86.73°, agrees with the defocus gradient in
+    27 of 27 high tilts, so the axis is not rotated;
+  - the alignment residual is unchanged (0.32 nm);
+  - the tomogram is the old one flipped in Y (voxel correlation 0.997; the best
+    proper rotation reaches 0.855), i.e. it has the opposite hand: the
+    specimen's.
 
 ## Deconvolution
 

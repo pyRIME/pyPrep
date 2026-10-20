@@ -127,10 +127,16 @@ larger fractions.
 - **"direction of the defocus gradient is uncertain"**: the series has few
   tilts beyond 20° or weak rings. pyPrep then uses the majority vote, and CTF
   correction at bin 4 is barely affected by it.
-- **New tomograms look rotated by 180° compared with older ones**: the
-  handedness was corrected (Reconstruction page, *Handedness*). The new ones
-  have the correct handedness. Choose *Keep as recorded* to get the old
-  orientation back.
+- **Tomo5 tomograms look upside down (flipped in Y) compared with older
+  ones**: pyPrep now inverts Tomography 5 images in Y (Frame alignment page,
+  *Image orientation*), and the older tomograms were mirror images of the
+  specimen (*How it works*, *Handedness*). Re-running rebuilds older Tomo5
+  stacks and tomograms automatically. *As stored* (or `--invert-y no`) gives
+  the old orientation, and the mirror image, back.
+- **New tomograms look rotated by 180° compared with older ones**: the CTF
+  check rotated the tilt axis (Reconstruction page, *Handedness*), because the
+  defocus gradient disagreed with the recorded axis. *Keep as recorded* gives
+  the old orientation back.
 - **Phase-plate data**: phase shifts are not fitted yet. Turn CTF correction
   off for such data.
 

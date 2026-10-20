@@ -98,9 +98,18 @@ and the *skip completed steps* option read it.
   - the series defocus (`defocus_um`, used for deconvolution);
   - the handedness and its confidence;
   - the specimen tilt offset (`tilt_offset_deg`).
+- The `image_frame` entry in `_pyprep.json`:
+  - whether the aligned images were inverted in Y (`invert_y`; Tomography 5
+    data by default);
+  - the tilt axis of the stacks as written (`tilt_axis`; 180° − the recorded
+    one when inverted) and the one recorded in the mdoc (`recorded_tilt_axis`);
+  - the reason.
+
+  Frame shifts (`shifts_px`, `_motion.csv`) stay in raw-movie coordinates.
 - The `handedness` entry in `_pyprep.json`:
-  - whether the tilt axis was rotated by 180° (`flipped`);
-  - the tilt axis used (`tilt_axis`) and the one recorded in the mdoc;
+  - whether the CTF check rotated the tilt axis by 180° (`flipped`);
+  - the tilt axis used (`tilt_axis`), the stacks' axis before the check
+    (`stack_tilt_axis`), the one recorded in the mdoc, and `invert_y`;
   - the reason.
 
   The stacks' `.mrc.mdoc` titles carry the axis used.

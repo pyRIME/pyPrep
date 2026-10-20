@@ -159,6 +159,16 @@ class SettingsForms(QObject):
             g_row.addWidget(w)
         g_row.addStretch()
         f.addRow("Gain handling", g_row)
+        self.invert_y = QComboBox()
+        self.invert_y.setMinimumWidth(320)
+        self.invert_y.addItem("Automatic (invert Tomography 5 data in Y)", "auto")
+        self.invert_y.addItem("Invert in Y", "yes")
+        self.invert_y.addItem("As stored", "no")
+        self.invert_y.setToolTip("Tomography 5 stores images upside down (IMOD reports its stacks as 'inverted in Y').\n"
+                                 "Used as stored, the tomograms are mirror images of the specimen. Automatic inverts\n"
+                                 "the aligned images of Tomo5 series in Y and negates the recorded tilt axis, so the\n"
+                                 "stacks, the CTF and the tomograms follow IMOD's conventions and the hand is right.")
+        f.addRow("Image orientation", self.invert_y)
         lay.addWidget(c)
 
         c, v, f = _card_with_form("Alignment")
@@ -400,9 +410,10 @@ class SettingsForms(QObject):
         self.handedness.addItem("Automatic (from the CTF defocus gradient)", "auto")
         self.handedness.addItem("Keep as recorded", "keep")
         self.handedness.addItem("Always flip", "flip")
-        self.handedness.setToolTip("Automatic: if the defocus gradient measured by CTF estimation shows the data\n"
-                                   "would reconstruct as a mirror image, the tilt axis is rotated by 180 deg.\n"
-                                   "The stacks' .mdoc files get the corrected tilt axis as well.")
+        self.handedness.setToolTip("Direction of the tilt axis. Automatic: if the defocus gradient measured by CTF\n"
+                                   "estimation disagrees with the recorded axis, the axis is rotated by 180 deg\n"
+                                   "(a 180 deg error in the recorded axis; the stacks' .mdoc files get the corrected\n"
+                                   "axis as well). Images stored mirrored are handled by 'Image orientation'.")
         self.sirt = _ispin(0, 100, "SIRT-like radial filter equivalent to this many SIRT iterations\n"
                                    "(better low-resolution contrast). 0 = plain weighted back-projection.")
         self.remove_xrays = QCheckBox("Remove X-rays / hot pixels (ccderaser)")
@@ -527,7 +538,7 @@ class SettingsForms(QObject):
                           eer_upsampling=int(self.eer_up.currentData()),
                           gain_path=self.gain_path.text().strip().strip('"'),
                           gain_mode=self.gain_mode.currentData(), gain_rotate=int(self.gain_rotate.currentData()),
-                          gain_flip=self.gain_flip.currentData())
+                          gain_flip=self.gain_flip.currentData(), invert_y=self.invert_y.currentData())
         kind, idx = self.device.currentData()
         dose = self.default_dose.value()
         return ProcessingSettings(input=i, motion=m, output=o, recon=r, ctf=c, use_gpu=(kind == "gpu"), gpu_id=idx,
@@ -547,6 +558,7 @@ class SettingsForms(QObject):
         self.gain_mode.setCurrentIndex(max(0, self.gain_mode.findData(i.gain_mode)))
         self.gain_rotate.setCurrentIndex(max(0, self.gain_rotate.findData(int(i.gain_rotate))))
         self.gain_flip.setCurrentIndex(max(0, self.gain_flip.findData(i.gain_flip)))
+        self.invert_y.setCurrentIndex(max(0, self.invert_y.findData(i.invert_y)))
         self.align_bin.setValue(int(m.align_bin))
         self.bfactor.setValue(m.bfactor)
         self.max_shift.setValue(m.max_shift)
