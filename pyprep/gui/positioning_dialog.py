@@ -32,6 +32,15 @@ def _refresh_deconv(recon_dir: Path, log) -> None:
         log(f"Deconvolution not updated: {e}")
 
 
+def _refresh_redep(recon_dir: Path, log) -> None:
+    """So must the redeposition-removed one (the cleaned stack does not depend on the positioning)."""
+    from .. import redep
+    try:
+        redep.refresh(recon_dir, log=log)
+    except Exception as e:
+        log(f"Redeposition-removed tomogram not updated: {e}")
+
+
 def _record(recon_dir: Path, geom, corr, margin_nm) -> None:
     """Note the positioning in pyprep_recon.json and refresh the gallery thumbnail."""
     j = recon_dir / "pyprep_recon.json"
@@ -278,6 +287,7 @@ class PositioningDialog(QDialog):
         def work():
             geom = P.apply_positioning(recon_dir, root, c, margin_px, log)
             _refresh_deconv(recon_dir, log)
+            _refresh_redep(recon_dir, log)
             _record(recon_dir, geom, c, margin_nm)
             return geom
         self._run("apply", work)
@@ -292,6 +302,7 @@ class PositioningDialog(QDialog):
         def work():
             P.restore_original(recon_dir, log)
             _refresh_deconv(recon_dir, log)
+            _refresh_redep(recon_dir, log)
             _record(recon_dir, None, None, None)
         self._run("restore", work)
 

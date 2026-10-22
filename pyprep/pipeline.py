@@ -86,7 +86,15 @@ def estimate_output_bytes(series: TiltSeries, settings: ProcessingSettings) -> i
         thick = max(r.thickness_nm, r.positioning_thickness_nm) * 10 / (series.pixel_size * b)
         volume = (nx // b) * (ny // b) * thick * 4
         total += 4 * stack + (4 if r.deconvolve else 3) * volume   # stacks; full/trimmed/trial(/deconvolved)
+        if r.remove_redeposition:                                  # cleaned stack, transmission, tomogram,
+            work = (nx // b) * (ny // b) * redep_work_px(series, b) * 2            # and the int16 working WBP
+            total += 2 * stack + volume + work
     return int(total)
+
+
+def redep_work_px(series: TiltSeries, b: int) -> int:
+    from .redep import WORK_THICKNESS_NM
+    return int(round(WORK_THICKNESS_NM * 10 / (series.pixel_size * b)))
 
 
 def result_json_path(series: TiltSeries, out_dir: Path) -> Path:
@@ -342,6 +350,30 @@ def deconvolve_series(series: TiltSeries, settings: ProcessingSettings, out_root
     except Exception as e:
         log.warning(f"Deconvolution failed: {e}")
         return None
+    finally:
+        _close_logger(log)
+    return rec
+
+
+def remove_redeposition_series(series: TiltSeries, settings: ProcessingSettings, out_root, rec: dict,
+                               log_callback=None, cancel: threading.Event | None = None) -> dict | None:
+    """Redeposition-removed copy of the series' tomogram (``<series>_rec_redep.mrc``, see redep.py); updates
+    ``rec``. A failure (no ASTRA, no lamella found) is logged and recorded, never fatal."""
+    from . import redep
+    recon_dir = Path(rec.get("recon_dir") or "")
+    if not (recon_dir / "tilt.com").is_file():
+        return None
+    out_dir = Path(out_root) / series.name
+    log = _series_logger(out_dir / f"{series.name}_pyprep.log", log_callback, mode="a")
+    try:
+        r = redep.remove_redeposition(recon_dir, series.name, log.info, cancel)
+        rec["redeposition"] = r
+        rec["redep_tomogram"] = r["tomogram"]
+        log.info(f"Redeposition removal done ({r['seconds']:.0f} s): {Path(r['tomogram']).name}")
+    except Exception as e:
+        log.warning(f"Redeposition removal failed: {e}")
+        rec["redeposition"] = {"status": "failed", "error": f"{type(e).__name__}: {e}"}
+        rec.pop("redep_tomogram", None)
     finally:
         _close_logger(log)
     return rec
@@ -765,6 +797,13 @@ def reconstruct_series(series: TiltSeries, settings: ProcessingSettings, out_roo
             (Path(rec["recon_dir"]) / "pyprep_recon.json").write_text(json.dumps(rec, indent=1))
         except OSError:
             pass
+    if rec["status"] == "complete" and settings.recon.remove_redeposition:
+        progress(-1, total_steps, "Removing redeposition")
+        remove_redeposition_series(series, settings, out_root, rec, log_callback, cancel)
+        try:
+            (Path(rec["recon_dir"]) / "pyprep_recon.json").write_text(json.dumps(rec, indent=1))
+        except OSError:
+            pass
     # Keep the series record in sync so the Results page can find the tomogram.
     j = result_json_path(series, out_dir)
     try:
@@ -791,14 +830,32 @@ def _ensure_deconvolved(series: TiltSeries, settings: ProcessingSettings, out_ro
     if rec.get("deconvolved") and Path(rec["deconvolved"]).exists():
         return
     if deconvolve_series(series, settings, out_root, rec, log_callback) is not None:
-        j.write_text(json.dumps(rec, indent=1))
-        sj = result_json_path(series, Path(out_root) / series.name)
-        try:
-            info = json.loads(sj.read_text())
-            info["reconstruction"] = {k: v for k, v in rec.items() if k != "directives"}
-            sj.write_text(json.dumps(info, indent=1))
-        except (OSError, ValueError):
-            pass
+        _save_recon_record(series, out_root, j, rec)
+
+
+def _ensure_redeposition_removed(series: TiltSeries, settings: ProcessingSettings, out_root, log_callback=None,
+                                 cancel: threading.Event | None = None) -> None:
+    j = recon_dir_for(series, settings, out_root) / "pyprep_recon.json"
+    try:
+        rec = json.loads(j.read_text())
+    except (OSError, ValueError):
+        return
+    if rec.get("redep_tomogram") and Path(rec["redep_tomogram"]).exists():
+        return
+    if remove_redeposition_series(series, settings, out_root, rec, log_callback, cancel) is not None:
+        _save_recon_record(series, out_root, j, rec)
+
+
+def _save_recon_record(series: TiltSeries, out_root, j: Path, rec: dict) -> None:
+    """Write the reconstruction record and keep the series record in sync (Results page)."""
+    j.write_text(json.dumps(rec, indent=1))
+    sj = result_json_path(series, Path(out_root) / series.name)
+    try:
+        info = json.loads(sj.read_text())
+        info["reconstruction"] = {k: v for k, v in rec.items() if k != "directives"}
+        sj.write_text(json.dumps(info, indent=1))
+    except (OSError, ValueError):
+        pass
 
 
 def run_series(series: TiltSeries, settings: ProcessingSettings, out_root,
@@ -830,6 +887,8 @@ def run_series(series: TiltSeries, settings: ProcessingSettings, out_root,
             result["recon"] = "skipped"
             if settings.recon.deconvolve:
                 _ensure_deconvolved(series, settings, out_root, log_callback)
+            if settings.recon.remove_redeposition:
+                _ensure_redeposition_removed(series, settings, out_root, log_callback, cancel)
         else:
             result["recon"] = reconstruct_series(series, settings, out_root, progress, cancel,
                                                  log_callback)["status"]

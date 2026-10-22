@@ -121,6 +121,7 @@ The exit code is 0 if every series succeeded, 1 otherwise.
 | `--no-deconv` | | do not write the deconvolved tomogram |
 | `--deconv-strength S` | 1.0 | deconvolution strength |
 | `--deconv-falloff F` | 1.0 | SNR falloff |
+| `--remove-redeposition` | | also write `<series>_rec_redep.mrc` with the dense surface layers removed (needs ASTRA: `pip install astra-toolbox`) |
 
 **Other**
 
@@ -153,6 +154,19 @@ Writes `<input>_deconv.mrc` (or `-o FILE`). The pixel size is read from the
 MRC header unless `--pixel` is given. `--kv`, `--cs`, `--amp-contrast`,
 `--strength`, `--falloff` and `--highpass` (fraction of Nyquist) set the
 filter. `--phase-flipped` tells it the tilt series was CTF-corrected.
+
+## `pyprep redep` — remove redeposition in a reconstruction folder
+
+```bat
+env\python.exe -m pyprep redep "out\TS_01\imod_bin4"
+```
+
+Runs redeposition removal (see [How it works](how-it-works.md#redeposition-removal))
+on an existing reconstruction: it writes `<series>_ali_redep.mrc`,
+`<series>_redep_transmission.mrc` and `<series>_rec_redep.mrc` and records them in
+`pyprep_recon.json`, as `run --remove-redeposition` does. The root name comes
+from the folder's `.edf`; `--root NAME` sets it. Needs the ASTRA Toolbox and a
+CUDA GPU.
 
 ## `pyprep gallery` — thumbnails and contact sheet
 

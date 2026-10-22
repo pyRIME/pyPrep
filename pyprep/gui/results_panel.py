@@ -248,6 +248,10 @@ class ResultsPanel(QWidget):
         tomo = recon.get("tomogram")
         if tomo and Path(tomo).exists():
             self.stack_combo.addItem(f"Tomogram   {Path(tomo).name}   ({Path(tomo).parent.name})", ("tomo", tomo))
+        clean = recon.get("redep_tomogram")
+        if clean and Path(clean).exists():
+            self.stack_combo.addItem(f"Tomogram, redeposition removed   {Path(clean).name}   ({Path(clean).parent.name})",
+                                     ("tomo", clean))
         for o in sorted(rec.get("outputs", []), key=lambda o: (-o["bin"], o["kind"] != "sum")):
             p = Path(o["path"])
             if not p.exists():

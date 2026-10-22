@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBo
                                QPlainTextEdit, QPushButton, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
-from .. import gpu, imod
+from .. import gpu, imod, redep
 from ..ctf import CtfSettings
 from ..imod import ReconSettings
 from ..motion import MotionSettings
@@ -452,6 +452,22 @@ class SettingsForms(QObject):
                                                     self.deconv_falloff.setEnabled(on)))
         lay.addWidget(c)
 
+        c, v, f = _card_with_form(
+            "Redeposition removal",
+            "Takes dense surface material (FIB redeposition, Pt/GIS grains) out of the aligned tilt series by "
+            "SIRT constrained to the lamella, then rebuilds the tomogram. Needs the ASTRA Toolbox and a CUDA GPU.")
+        astra_ok, astra_msg = redep.astra_status()
+        self.remove_redep = QCheckBox("Also write a tomogram with the redeposition removed   (<series>_rec_redep.mrc)")
+        self.remove_redep.setEnabled(astra_ok)
+        self.remove_redep.setToolTip(
+            "Finds the lamella and the dense layers beyond its surfaces, models them by SIRT (GPU) and fills their\n"
+            "shadow in every view. Removes the shading and blotches they cast into the interior; fine detail\n"
+            "(below ~12 nm) is unchanged. The normal tomogram is kept. Needs about 10 GB of memory at bin 4."
+            if astra_ok else f"Unavailable: {astra_msg}.\nInstall it into pyPrep's environment, then restart pyPrep.")
+        v.insertWidget(2, self.remove_redep)
+        f.addRow("ASTRA", dim_label(astra_msg))
+        lay.addWidget(c)
+
         c, v, f = _card_with_form("Advanced", "Extra batchruntomo directives, one 'key = value' per line. "
                                               "They override the preset (see IMOD's directives.csv).")
         self.extra = QPlainTextEdit()
@@ -525,7 +541,9 @@ class SettingsForms(QObject):
                           use_gpu=self.imod_gpu.isChecked(), handedness=self.handedness.currentData(),
                           ctf_correct=self.ctf_correct.isChecked(),
                           deconvolve=self.deconvolve.isChecked(), deconv_strength=self.deconv_strength.value(),
-                          deconv_falloff=self.deconv_falloff.value(), extra_directives=self.extra.toPlainText())
+                          deconv_falloff=self.deconv_falloff.value(),
+                          remove_redeposition=self.remove_redep.isEnabled() and self.remove_redep.isChecked(),
+                          extra_directives=self.extra.toPlainText())
         c = CtfSettings(enabled=self.ctf_enabled.isChecked(), cs_mm=self.ctf_cs.value(),
                         amplitude_contrast=self.ctf_amp.value(),
                         min_res_A=max(self.ctf_lo.value(), self.ctf_hi.value()),
@@ -604,6 +622,7 @@ class SettingsForms(QObject):
         self.deconv_falloff.setValue(r.deconv_falloff)
         self.deconv_strength.setEnabled(r.deconvolve)
         self.deconv_falloff.setEnabled(r.deconvolve)
+        self.remove_redep.setChecked(bool(r.remove_redeposition) and self.remove_redep.isEnabled())
         c = s.ctf
         self.ctf_enabled.setChecked(c.enabled)
         self.ctf_cs.setValue(c.cs_mm)

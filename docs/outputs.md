@@ -25,6 +25,9 @@ For every tilt series, pyPrep writes a folder `<output>\<series>\`:
         ├── TS_01.edf                   open this in etomo
         ├── TS_01_rec.mrc               final tomogram (trimmed, rotated so Z is the slice axis)
         ├── TS_01_rec_deconv.mrc        deconvolved copy (if deconvolution is on)
+        ├── TS_01_rec_redep.mrc         redeposition removed (if that option is on; needs ASTRA)
+        ├── TS_01_ali_redep.mrc         the cleaned aligned stack it was rebuilt from
+        ├── TS_01_redep_transmission.mrc  per-view transmission of the removed dense layers
         ├── TS_01_full_rec.mrc          untrimmed reconstruction
         ├── pyprep_batchruntomo.adoc    the directives used
         ├── pyprep_recon.json           reconstruction record
@@ -126,6 +129,12 @@ With CTF correction, `<series>.defocus` is copied in, re-labelled with the
 aligned tilt angles, and used by `ctfcorrection.com`. With deconvolution,
 `<series>_rec_deconv.mrc` is written next to `<series>_rec.mrc` (float32,
 same pixel size); its parameters are in `pyprep_recon.json` under `deconv`.
+With redeposition removal, `<series>_rec_redep.mrc` is reconstructed from
+`<series>_ali_redep.mrc` with the project's `tilt.com` and `trimvol`, so it has
+the same geometry as `<series>_rec.mrc`. `<series>_redep_transmission.mrc` holds
+each view's transmission *T* of the removed layers. `pyprep_recon.json` records
+the lamella interior, the layers found (depth, coverage, morphology), the
+projection-geometry calibration and the timing under `redeposition`.
 
 *Position tomogram* adds:
 

@@ -22,6 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+redep = ["astra-toolbox"]   # redeposition removal (ASTRA Toolbox: GPLv3, needs a CUDA GPU)
 
 [project.scripts]
 pyprep = "pyprep.cli:main"

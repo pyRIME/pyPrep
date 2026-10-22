@@ -244,6 +244,18 @@ Both use the defocus measured by CTF estimation. Without it, deconvolution
 falls back to the target defocus in the mdoc and the log says so, and CTF
 correction is skipped.
 
+**Redeposition removal**
+
+| Setting | Default | Notes |
+|---|---|---|
+| Also write a tomogram with the redeposition removed | off | `<series>_rec_redep.mrc`: the dense surface layers of a FIB lamella (redeposition, Pt/GIS grains) are taken out of the tilt series by SIRT constrained to the lamella, then the tomogram is rebuilt. Their shading and blotches leave the interior; fine detail is unchanged. The normal tomogram is kept. A few minutes on the GPU and about 10 GB of memory at bin 4. |
+
+The option is greyed out until the ASTRA Toolbox is installed in pyPrep's
+environment with a CUDA GPU (the line under it says what is missing; see
+[Installation](installation.md#optional-redeposition-removal)). Restart pyPrep after
+installing it. When the lamella interior cannot be found (for example a field
+without cells), the step is skipped and the log says why.
+
 **Advanced**: extra batchruntomo directives (`key = value`, one per line) are
 added to — and override — the preset. **Show directives for the selected
 series** displays exactly what will be sent to batchruntomo. The directive
@@ -274,8 +286,8 @@ Writing large stacks is often limited by disk speed.
 
 ![Results page](images/results.png)
 
-- **Show**: the deconvolved tomogram and the tomogram (if reconstructed), and
-  every stack written. Stacks are
+- **Show**: the deconvolved tomogram, the tomogram and the redeposition-removed
+  tomogram (each if made), and every stack written. Stacks are
   loaded in the background (a progress bar appears); large full-resolution
   stacks are shown reduced for speed.
 - The slider under the image steps through tilts (labelled with the tilt

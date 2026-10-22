@@ -17,6 +17,8 @@ and reconstruction uses IMOD.
                                                           (ctfphaseflip)
                                                                   │
                                                         tomogram ──► deconvolved tomogram
+                                                                  │
+                                              (optional, ASTRA)   └──► redeposition removed
 ```
 
 ## Reading the data
@@ -212,6 +214,44 @@ is radially symmetric in 3D and applied with one FFT of the volume on the GPU,
 with a fallback to the CPU when memory runs out. The output is scaled to the
 input's mean and standard deviation. After *Position tomogram* rebuilds a
 tomogram, the deconvolved copy is re-made with the same parameters.
+
+## Redeposition removal
+
+FIB lamellae carry dense material on their surfaces: redeposited grains and the
+Pt/GIS protective layer. Single-axis tilting smears it through the volume, so
+it casts shading and blotches into the cell. `pyprep/redep.py` (optional; needs
+the ASTRA Toolbox with a CUDA GPU) removes it from the tilt series:
+
+1. A plain WBP of the reconstruction's aligned, phase-flipped stack, about
+   730 nm thick, in the projection geometry (no offset, shift or X-axis tilt).
+2. `pyprep/lamella.py` locates the lamella interior from its band-pass texture.
+   Beyond each surface, the dense layer's depth, extent and coverage are
+   measured in coordinates flattened to the fitted surfaces.
+3. Grain masks: per surface, the grain footprint is segmented in the flattened
+   slab where the layer's cross-section is widest (the valley of a bimodal
+   histogram, else dense cores) and extruded over the layer's apparent depth.
+   Only material outside the interior can be removed.
+4. SIRT (ASTRA, GPU, 100 iterations) of *q* = −ln(*p* / view mean),
+   constrained to the slab: the interior plus the layers.
+5. The SIRT density inside the grain masks, projected, gives each view's
+   transmission *T* = exp(−*A c*).
+6. The cleaned view is *p* + (1 − *T*) *m*, with *m* the local grain-free mean
+   (*p* / *T*, low-passed). The grains' shadow is filled with what the rays
+   would have carried without them; dividing by *T* instead would weight the
+   shadowed rays, which carry fewer electrons, as fully as the others and add
+   noise.
+7. The tomogram is rebuilt from the cleaned stack with the project's own
+   `tilt.com` and `trimvol` (same geometry, filter and positioning), as
+   `<series>_rec_redep.mrc`. The normal tomogram is kept.
+
+On C. difficile lamellae with heavy redeposition it removed the shading under
+the grains at 50–400 nm (54–81 % of the power above 100 nm next to the layers)
+and changed nothing below about 12 nm: the even/odd FSC is unchanged. It is a
+cleaner tomogram for viewing and segmentation; template matching and averaging
+gain little. The working volumes need about 10 GB of memory at bin 4 (2.6 Å
+data); finer reconstructions are refused. When no lamella interior is found,
+the step is skipped and logged. After *Position tomogram*, the
+redeposition-removed tomogram is rebuilt from the same cleaned stack.
 
 ## Dose weighting
 
