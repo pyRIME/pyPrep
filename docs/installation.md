@@ -94,6 +94,21 @@ installer) or at `C:\Program Files\IMOD`. It runs IMOD's scripts with the same
 `python` that etomo uses, never with pyPrep's own environment. The
 **Reconstruction** page shows whether IMOD was found and which Python it will use.
 
+### Optional: redeposition removal
+
+Redeposition removal needs the [ASTRA Toolbox](https://astra-toolbox.com) and a
+CUDA GPU. Install it into pyPrep's environment:
+
+```bat
+env\python.exe -m pip install astra-toolbox
+```
+
+or run `set PYPREP_REDEP=1` before `install.bat`, which installs pyPrep with its
+`redep` extra. ASTRA brings its own CUDA runtime from pip. Restart pyPrep; the
+**Reconstruction** page then enables *Also write a tomogram with the redeposition
+removed* and shows the ASTRA version under it. ASTRA is licensed under the GPLv3
+and is not part of pyPrep.
+
 ## 5. Start pyPrep
 
 Use the **pyPrep** shortcut on the Desktop or in the Start menu (or

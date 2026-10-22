@@ -25,6 +25,9 @@ For every tilt series, pyPrep writes a folder `<output>\<series>\`:
         ├── TS_01.edf                   open this in etomo
         ├── TS_01_rec.mrc               final tomogram (trimmed, rotated so Z is the slice axis)
         ├── TS_01_rec_deconv.mrc        deconvolved copy (if deconvolution is on)
+        ├── TS_01_rec_redep.mrc         redeposition removed (if that option is on; needs ASTRA)
+        ├── TS_01_ali_redep.mrc         the cleaned aligned stack it was rebuilt from
+        ├── TS_01_redep_transmission.mrc  per-view transmission of the removed dense layers
         ├── TS_01_full_rec.mrc          untrimmed reconstruction
         ├── pyprep_batchruntomo.adoc    the directives used
         ├── pyprep_recon.json           reconstruction record
@@ -98,9 +101,18 @@ and the *skip completed steps* option read it.
   - the series defocus (`defocus_um`, used for deconvolution);
   - the handedness and its confidence;
   - the specimen tilt offset (`tilt_offset_deg`).
+- The `image_frame` entry in `_pyprep.json`:
+  - whether the aligned images were inverted in Y (`invert_y`; Tomography 5
+    data by default);
+  - the tilt axis of the stacks as written (`tilt_axis`; 180° − the recorded
+    one when inverted) and the one recorded in the mdoc (`recorded_tilt_axis`);
+  - the reason.
+
+  Frame shifts (`shifts_px`, `_motion.csv`) stay in raw-movie coordinates.
 - The `handedness` entry in `_pyprep.json`:
-  - whether the tilt axis was rotated by 180° (`flipped`);
-  - the tilt axis used (`tilt_axis`) and the one recorded in the mdoc;
+  - whether the CTF check rotated the tilt axis by 180° (`flipped`);
+  - the tilt axis used (`tilt_axis`), the stacks' axis before the check
+    (`stack_tilt_axis`), the one recorded in the mdoc, and `invert_y`;
   - the reason.
 
   The stacks' `.mrc.mdoc` titles carry the axis used.
@@ -117,6 +129,12 @@ With CTF correction, `<series>.defocus` is copied in, re-labelled with the
 aligned tilt angles, and used by `ctfcorrection.com`. With deconvolution,
 `<series>_rec_deconv.mrc` is written next to `<series>_rec.mrc` (float32,
 same pixel size); its parameters are in `pyprep_recon.json` under `deconv`.
+With redeposition removal, `<series>_rec_redep.mrc` is reconstructed from
+`<series>_ali_redep.mrc` with the project's `tilt.com` and `trimvol`, so it has
+the same geometry as `<series>_rec.mrc`. `<series>_redep_transmission.mrc` holds
+each view's transmission *T* of the removed layers. `pyprep_recon.json` records
+the lamella interior, the layers found (depth, coverage, morphology), the
+projection-geometry calibration and the timing under `redeposition`.
 
 *Position tomogram* adds:
 

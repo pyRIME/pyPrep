@@ -116,6 +116,7 @@ EER data to check the gain reference.
 | EER rendering | Physical pixels (4K) | *2x super-resolution (8K)* uses the EER sub-pixel positions; frames are aligned at 8K and Fourier-binned back to the physical pixel size (less aliasing, ~4x slower). Output pixel sizes are unchanged. |
 | Gain reference | none | Needed for **EER** (Falcon frames are not gain-corrected): use the `.gain` file EPU writes. **Not needed for Tomo5 K3 fractions**, which are already gain-normalized. MRC and TIFF references are also accepted; DigitalMicrograph `.dm4` must first be converted with IMOD's `dm2mrc`. |
 | Gain handling | Auto, rotate 0°, no flip | *Auto* divides by `.gain` files / for EER movies and multiplies otherwise. If the reference is in a different orientation from the frames, set the rotation/flip (pyPrep reports a size mismatch, and suggests a rotation when the reference looks transposed). |
+| Image orientation | Automatic | Tomography 5 stores images upside down (IMOD reports its stacks as "inverted in Y"); used as stored, the tomograms are mirror images. *Automatic* inverts the aligned images of Tomo5 series in Y and mirrors the recorded tilt axis with them, so the stacks, the CTF and the tomograms follow IMOD's conventions and have the specimen's hand. *Invert in Y* / *As stored* force it either way. See *Handedness* on the Reconstruction page. |
 
 ### Alignment
 
@@ -195,28 +196,40 @@ at the top shows whether IMOD was found.
 | Positioning | Automatic | IMOD cryo-positioning finds the specimen slab and sets thickness and pitch. Sparse specimens (isolated particles, thin films) can defeat it; the *Fallback thickness* is then used and a warning is logged. *Fixed thickness* skips positioning. |
 | Positioning thickness | 330 nm | Thickness of the trial tomogram used for positioning. |
 | Fallback / fixed thickness | 200 nm | |
-| Handedness | Automatic | See below. *Keep as recorded* uses the tilt axis from the mdoc; *Always flip* rotates it by 180°. |
+| Handedness | Automatic | Direction of the tilt axis; see below. *Keep as recorded* uses the tilt axis from the mdoc (mirrored with the images when they are inverted in Y); *Always flip* rotates it by 180°. |
 | SIRT-like filter | 6 | Radial filter equivalent to this many SIRT iterations (better low-resolution contrast); 0 = plain weighted back-projection. |
 | CPU cores, GPU | all but one core, off | GPU back-projection needs a CUDA-enabled IMOD. |
 | Remove X-rays | on | ccderaser on the stack. |
 
-**Handedness.** If the tilt-angle sign, the tilt-axis angle or the image
-orientation are not what IMOD assumes, the tomogram comes out as a mirror
-image. This does not matter for segmentation or measuring shapes. It does
-matter for subtomogram averaging, for helices, and for anything chiral.
+**Handedness.** A tomogram can come out as a mirror image of the specimen.
+That does not matter for segmentation or measuring shapes. It does matter for
+subtomogram averaging, for helices, and for anything chiral. Two settings
+together give the specimen's hand by default:
 
-CTF estimation detects this from the direction of the defocus gradient. With
-*Automatic*, pyPrep then reconstructs with the tilt axis rotated by 180°,
-which gives the correct handedness. It does this when at least 80% of the
-tilts beyond 20° agree. The stacks' `.mrc.mdoc` files get the corrected tilt
-axis too, so an etomo project you set up by hand agrees. The Results page
-shows *handedness corrected* when this applies.
+- *Image orientation* (Frame alignment page). A tomogram has the hand of the
+  images it is built from. Tomography 5 stores its images upside down, so with
+  *Automatic* pyPrep inverts them in Y. The Results page then shows *images
+  inverted in Y (Tomography 5)*.
+- *Handedness* (this page) sets the direction of the tilt axis. CTF estimation
+  measures the direction of the defocus gradient. If it disagrees with the
+  recorded tilt axis in at least 80 % of the tilts beyond 20°, the recorded
+  axis is 180° off. With *Automatic*, pyPrep then reconstructs with the axis
+  rotated by 180°. The stacks' `.mrc.mdoc` files get the corrected tilt axis
+  too, so an etomo project you set up by hand agrees. The Results page shows
+  *tilt axis rotated 180° by the CTF check* when this applies. With correctly
+  oriented images, the recorded axis normally passes.
 
-A corrected tomogram is the point mirror of an uncorrected one: rotated 180°
-in XY and flipped in Z. Tomograms made before the correction (or by etomo
-from the original mdoc) therefore look rotated by 180° compared with new
-ones. When the decision changes, a series' tomogram is out of date and is
-reconstructed again on the next run.
+The defocus gradient cannot tell a 180° axis error from images stored
+mirrored: both look like an inverted gradient. Earlier pyPrep versions
+therefore rotated the axis of Tomo5 data. The gradient then agreed, but the
+tomograms were mirror images. This was found with 70S ribosomes in *C.
+difficile* lamellae (template matching and subtomogram averaging; see *How it
+works*).
+
+New tomograms of Tomo5 data are the old ones flipped in Y, i.e. upright, as
+on the microscope's screen. When the image orientation or the axis decision
+changes, the series' stacks and tomogram are out of date and are rebuilt on
+the next run.
 
 **CTF correction and deconvolution**
 
@@ -230,6 +243,18 @@ reconstructed again on the next run.
 Both use the defocus measured by CTF estimation. Without it, deconvolution
 falls back to the target defocus in the mdoc and the log says so, and CTF
 correction is skipped.
+
+**Redeposition removal**
+
+| Setting | Default | Notes |
+|---|---|---|
+| Also write a tomogram with the redeposition removed | off | `<series>_rec_redep.mrc`: the dense surface layers of a FIB lamella (redeposition, Pt/GIS grains) are taken out of the tilt series by SIRT constrained to the lamella, then the tomogram is rebuilt. Their shading and blotches leave the interior; fine detail is unchanged. The normal tomogram is kept. A few minutes on the GPU and about 10 GB of memory at bin 4. |
+
+The option is greyed out until the ASTRA Toolbox is installed in pyPrep's
+environment with a CUDA GPU (the line under it says what is missing; see
+[Installation](installation.md#optional-redeposition-removal)). Restart pyPrep after
+installing it. When the lamella interior cannot be found (for example a field
+without cells), the step is skipped and the log says why.
 
 **Advanced**: extra batchruntomo directives (`key = value`, one per line) are
 added to — and override — the preset. **Show directives for the selected
@@ -261,8 +286,8 @@ Writing large stacks is often limited by disk speed.
 
 ![Results page](images/results.png)
 
-- **Show**: the deconvolved tomogram and the tomogram (if reconstructed), and
-  every stack written. Stacks are
+- **Show**: the deconvolved tomogram, the tomogram and the redeposition-removed
+  tomogram (each if made), and every stack written. Stacks are
   loaded in the background (a progress bar appears); large full-resolution
   stacks are shown reduced for speed.
 - The slider under the image steps through tilts (labelled with the tilt

@@ -248,6 +248,10 @@ class ResultsPanel(QWidget):
         tomo = recon.get("tomogram")
         if tomo and Path(tomo).exists():
             self.stack_combo.addItem(f"Tomogram   {Path(tomo).name}   ({Path(tomo).parent.name})", ("tomo", tomo))
+        clean = recon.get("redep_tomogram")
+        if clean and Path(clean).exists():
+            self.stack_combo.addItem(f"Tomogram, redeposition removed   {Path(clean).name}   ({Path(clean).parent.name})",
+                                     ("tomo", clean))
         for o in sorted(rec.get("outputs", []), key=lambda o: (-o["bin"], o["kind"] != "sum")):
             p = Path(o["path"])
             if not p.exists():
@@ -268,8 +272,10 @@ class ResultsPanel(QWidget):
                          + (f" ({recon.get('preset')}, {recon.get('seconds', 0):.0f} s)" if recon.get("seconds") else ""))
         if self._ctf:
             parts.append(f"defocus {self._ctf.get('defocus_um', 0):.2f} µm")
+        if (rec.get("image_frame") or {}).get("invert_y"):
+            parts.append("images inverted in Y (Tomography 5)")
         if (rec.get("handedness") or {}).get("flipped"):
-            parts.append(f"handedness corrected (tilt axis {rec['handedness']['tilt_axis']:.1f}°)")
+            parts.append(f"tilt axis rotated 180° by the CTF check ({rec['handedness']['tilt_axis']:.1f}°)")
         if rec.get("error"):
             parts.append(f"<span style='color:{theme.DANGER}'>{rec['error']}</span>")
         self.title.setText(" &nbsp;·&nbsp; ".join(parts))

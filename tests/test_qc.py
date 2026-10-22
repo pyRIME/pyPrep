@@ -68,12 +68,15 @@ def test_exclusion_makes_stacks_and_tomogram_stale(tmp_path):
     series_dir = out / "TS_1"
     series_dir.mkdir(parents=True)
     (series_dir / "TS_1.mrc").write_bytes(b"x")
-    result_json_path(ts, series_dir).write_text(json.dumps({"status": "complete", "used_tilts": [0, 1, 2]}))
+    frame = {"invert_y": True, "tilt_axis": 93.8, "recorded_tilt_axis": 86.2, "reason": "Tomo5"}
+    result_json_path(ts, series_dir).write_text(json.dumps({"status": "complete", "used_tilts": [0, 1, 2],
+                                                            "image_frame": frame}))
     recon_dir = series_dir / "imod_bin4"
     recon_dir.mkdir()
     (recon_dir / "TS_1_rec.mrc").write_bytes(b"x")
     (recon_dir / "pyprep_recon.json").write_text(json.dumps(
-        {"status": "complete", "preset": "patch", "tomogram": str(recon_dir / "TS_1_rec.mrc"), "used_tilts": [0, 1, 2]}))
+        {"status": "complete", "preset": "patch", "tomogram": str(recon_dir / "TS_1_rec.mrc"), "used_tilts": [0, 1, 2],
+         "invert_y": True}))
     s.recon.enabled = False
     assert is_complete(ts, s, out)
     s.recon.enabled = True

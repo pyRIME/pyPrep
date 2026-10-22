@@ -53,7 +53,10 @@ echo Installing PyTorch %TORCH_VERSION% (%TORCH_VARIANT%) - about 2.5 GB for CUD
 "%PY%" -m pip install torch==%TORCH_VERSION% --index-url https://download.pytorch.org/whl/%TORCH_VARIANT% || goto :fail
 
 rem ---- pyPrep and its other dependencies ---------------------------------------
-"%PY%" -m pip install -e ".[test]" || goto :fail
+rem      set PYPREP_REDEP=1 to add the ASTRA Toolbox (GPLv3) for redeposition removal
+set "EXTRAS=test"
+if "%PYPREP_REDEP%"=="1" set "EXTRAS=test,redep"
+"%PY%" -m pip install -e ".[%EXTRAS%]" || goto :fail
 
 rem ---- shortcuts (Desktop + Start menu); set PYPREP_NO_SHORTCUT=1 to skip -----
 if not "%PYPREP_NO_SHORTCUT%"=="1" "%PY%" "%~dp0scripts\make_shortcut.py"

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBo
                                QPlainTextEdit, QPushButton, QSpinBox, QStackedWidget, QVBoxLayout,
                                QWidget)
 
-from .. import gpu, imod
+from .. import gpu, imod, redep
 from ..ctf import CtfSettings
 from ..imod import ReconSettings
 from ..motion import MotionSettings
@@ -159,6 +159,16 @@ class SettingsForms(QObject):
             g_row.addWidget(w)
         g_row.addStretch()
         f.addRow("Gain handling", g_row)
+        self.invert_y = QComboBox()
+        self.invert_y.setMinimumWidth(320)
+        self.invert_y.addItem("Automatic (invert Tomography 5 data in Y)", "auto")
+        self.invert_y.addItem("Invert in Y", "yes")
+        self.invert_y.addItem("As stored", "no")
+        self.invert_y.setToolTip("Tomography 5 stores images upside down (IMOD reports its stacks as 'inverted in Y').\n"
+                                 "Used as stored, the tomograms are mirror images of the specimen. Automatic inverts\n"
+                                 "the aligned images of Tomo5 series in Y and negates the recorded tilt axis, so the\n"
+                                 "stacks, the CTF and the tomograms follow IMOD's conventions and the hand is right.")
+        f.addRow("Image orientation", self.invert_y)
         lay.addWidget(c)
 
         c, v, f = _card_with_form("Alignment")
@@ -400,9 +410,10 @@ class SettingsForms(QObject):
         self.handedness.addItem("Automatic (from the CTF defocus gradient)", "auto")
         self.handedness.addItem("Keep as recorded", "keep")
         self.handedness.addItem("Always flip", "flip")
-        self.handedness.setToolTip("Automatic: if the defocus gradient measured by CTF estimation shows the data\n"
-                                   "would reconstruct as a mirror image, the tilt axis is rotated by 180 deg.\n"
-                                   "The stacks' .mdoc files get the corrected tilt axis as well.")
+        self.handedness.setToolTip("Direction of the tilt axis. Automatic: if the defocus gradient measured by CTF\n"
+                                   "estimation disagrees with the recorded axis, the axis is rotated by 180 deg\n"
+                                   "(a 180 deg error in the recorded axis; the stacks' .mdoc files get the corrected\n"
+                                   "axis as well). Images stored mirrored are handled by 'Image orientation'.")
         self.sirt = _ispin(0, 100, "SIRT-like radial filter equivalent to this many SIRT iterations\n"
                                    "(better low-resolution contrast). 0 = plain weighted back-projection.")
         self.remove_xrays = QCheckBox("Remove X-rays / hot pixels (ccderaser)")
@@ -439,6 +450,22 @@ class SettingsForms(QObject):
         f.addRow("SNR falloff", self.deconv_falloff)
         self.deconvolve.toggled.connect(lambda on: (self.deconv_strength.setEnabled(on),
                                                     self.deconv_falloff.setEnabled(on)))
+        lay.addWidget(c)
+
+        c, v, f = _card_with_form(
+            "Redeposition removal",
+            "Takes dense surface material (FIB redeposition, Pt/GIS grains) out of the aligned tilt series by "
+            "SIRT constrained to the lamella, then rebuilds the tomogram. Needs the ASTRA Toolbox and a CUDA GPU.")
+        astra_ok, astra_msg = redep.astra_status()
+        self.remove_redep = QCheckBox("Also write a tomogram with the redeposition removed   (<series>_rec_redep.mrc)")
+        self.remove_redep.setEnabled(astra_ok)
+        self.remove_redep.setToolTip(
+            "Finds the lamella and the dense layers beyond its surfaces, models them by SIRT (GPU) and fills their\n"
+            "shadow in every view. Removes the shading and blotches they cast into the interior; fine detail\n"
+            "(below ~12 nm) is unchanged. The normal tomogram is kept. Needs about 10 GB of memory at bin 4."
+            if astra_ok else f"Unavailable: {astra_msg}.\nInstall it into pyPrep's environment, then restart pyPrep.")
+        v.insertWidget(2, self.remove_redep)
+        f.addRow("ASTRA", dim_label(astra_msg))
         lay.addWidget(c)
 
         c, v, f = _card_with_form("Advanced", "Extra batchruntomo directives, one 'key = value' per line. "
@@ -514,7 +541,9 @@ class SettingsForms(QObject):
                           use_gpu=self.imod_gpu.isChecked(), handedness=self.handedness.currentData(),
                           ctf_correct=self.ctf_correct.isChecked(),
                           deconvolve=self.deconvolve.isChecked(), deconv_strength=self.deconv_strength.value(),
-                          deconv_falloff=self.deconv_falloff.value(), extra_directives=self.extra.toPlainText())
+                          deconv_falloff=self.deconv_falloff.value(),
+                          remove_redeposition=self.remove_redep.isEnabled() and self.remove_redep.isChecked(),
+                          extra_directives=self.extra.toPlainText())
         c = CtfSettings(enabled=self.ctf_enabled.isChecked(), cs_mm=self.ctf_cs.value(),
                         amplitude_contrast=self.ctf_amp.value(),
                         min_res_A=max(self.ctf_lo.value(), self.ctf_hi.value()),
@@ -527,7 +556,7 @@ class SettingsForms(QObject):
                           eer_upsampling=int(self.eer_up.currentData()),
                           gain_path=self.gain_path.text().strip().strip('"'),
                           gain_mode=self.gain_mode.currentData(), gain_rotate=int(self.gain_rotate.currentData()),
-                          gain_flip=self.gain_flip.currentData())
+                          gain_flip=self.gain_flip.currentData(), invert_y=self.invert_y.currentData())
         kind, idx = self.device.currentData()
         dose = self.default_dose.value()
         return ProcessingSettings(input=i, motion=m, output=o, recon=r, ctf=c, use_gpu=(kind == "gpu"), gpu_id=idx,
@@ -547,6 +576,7 @@ class SettingsForms(QObject):
         self.gain_mode.setCurrentIndex(max(0, self.gain_mode.findData(i.gain_mode)))
         self.gain_rotate.setCurrentIndex(max(0, self.gain_rotate.findData(int(i.gain_rotate))))
         self.gain_flip.setCurrentIndex(max(0, self.gain_flip.findData(i.gain_flip)))
+        self.invert_y.setCurrentIndex(max(0, self.invert_y.findData(i.invert_y)))
         self.align_bin.setValue(int(m.align_bin))
         self.bfactor.setValue(m.bfactor)
         self.max_shift.setValue(m.max_shift)
@@ -592,6 +622,7 @@ class SettingsForms(QObject):
         self.deconv_falloff.setValue(r.deconv_falloff)
         self.deconv_strength.setEnabled(r.deconvolve)
         self.deconv_falloff.setEnabled(r.deconvolve)
+        self.remove_redep.setChecked(bool(r.remove_redeposition) and self.remove_redep.isEnabled())
         c = s.ctf
         self.ctf_enabled.setChecked(c.enabled)
         self.ctf_cs.setValue(c.cs_mm)

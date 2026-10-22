@@ -21,6 +21,7 @@ class InputSettings:
     gain_mode: str = "auto"         # auto (divide for .gain/EER, multiply otherwise) | multiply | divide
     gain_rotate: int = 0            # rotate the gain reference counter-clockwise by 0/90/180/270 deg
     gain_flip: str = "none"         # then flip it: none | x (left-right) | y (up-down)
+    invert_y: str = "auto"          # invert the aligned images in Y: auto (Tomography 5 data) | yes | no
 
 
 @dataclass

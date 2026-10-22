@@ -57,6 +57,7 @@ class ReconSettings:
     deconvolve: bool = True                # also write <series>_rec_deconv.mrc (Wiener-like filter)
     deconv_strength: float = 1.0
     deconv_falloff: float = 1.0
+    remove_redeposition: bool = False      # also write <series>_rec_redep.mrc (needs ASTRA; redep.py)
     extra_directives: str = ""             # advanced: raw "key = value" lines, override the preset
 
     def to_dict(self):

@@ -33,8 +33,12 @@ thumbnail of every tomogram in the session, with its name, to pick the best data
 to take further. pyPrep measures the **defocus of every tilt** on the GPU (tilt-aware, with
 automatic handedness), phase-flips the stack in IMOD with it, and writes a
 **deconvolved tomogram** with stronger contrast for viewing and segmentation.
-The defocus gradient also shows whether tomograms would come out mirrored;
-pyPrep then corrects the **handedness** automatically.
+With the optional ASTRA Toolbox it also writes a tomogram with the **redeposition
+removed**: the dense surface layers of FIB lamellae (redeposition, Pt/GIS grains)
+are taken out of the tilt series, so their shading and blotches leave the interior.
+Tomograms have the specimen's **handedness** by default: Tomography 5 images,
+which are stored upside down, are inverted in Y, and the defocus gradient
+checks the direction of the tilt axis.
 When IMOD's automatic positioning fails, **Position tomogram**
 lets you mark the top and bottom of the specimen. pyPrep then rebuilds the
 tomogram flat, centred and at the right thickness.
@@ -59,6 +63,7 @@ Each tilt series ends up in `<Output>\<series>\`:
 | `.rawtlt`, `.mrc.mdoc` | tilt angles and metadata for etomo |
 | `imod_bin4\<series>_rec.mrc` | tomogram (`imod_bin4\<series>.edf` opens the etomo project) |
 | `imod_bin4\<series>_rec_deconv.mrc` | deconvolved tomogram, for viewing and segmentation |
+| `imod_bin4\<series>_rec_redep.mrc` | tomogram with the redeposition removed (optional, needs ASTRA) |
 | `<series>.defocus` | per-tilt defocus (IMOD format) |
 | `_motion.csv`, `_pyprep.json`, `_pyprep.log` | frame shifts, full record of the run, log |
 
@@ -115,6 +120,7 @@ The code is organised as follows:
 - `pyprep/motion.py`: frame alignment
 - `pyprep/ctf.py`, `pyprep/deconv.py`: CTF estimation, tomogram deconvolution
 - `pyprep/positioning.py`: interactive tomogram positioning
+- `pyprep/redep.py`, `pyprep/lamella.py`: redeposition removal, and the lamella locator it uses
 - `pyprep/pipeline.py`: processing a tilt series
 - `pyprep/imod.py`: running batchruntomo
 - `pyprep/gui`: the PySide6 app
@@ -127,6 +133,11 @@ pyPrep is released under the [BSD 3-Clause License](LICENSE). You may use,
 modify and redistribute it, including commercially, provided you keep the
 copyright notice and do not use the author's name to promote derived products.
 
+Redeposition removal uses the [ASTRA Toolbox](https://astra-toolbox.com), an
+optional dependency under the GPLv3 that pyPrep does not include. Install it with
+`pip install astra-toolbox` (or `pip install -e ".[redep]"`). A redistributed
+bundle of pyPrep together with ASTRA falls under the GPLv3's terms.
+
 To cite pyPrep, use **Cite this repository** on the GitHub page (from
 [`CITATION.cff`](CITATION.cff)).
 
@@ -137,6 +148,8 @@ pyPrep builds on ideas from MotionCor2/3 (frame alignment).
 - [IMOD](https://bio3d.colorado.edu/imod/) for tilt-series alignment and
   reconstruction;
 - [PyTorch](https://pytorch.org) for GPU computing;
+- the [ASTRA Toolbox](https://astra-toolbox.com) for the SIRT of redeposition
+  removal (optional; van Aarle et al., Ultramicroscopy 2015; Opt. Express 2016);
 - [imagecodecs](https://github.com/cgohlke/imagecodecs) and
   [tifffile](https://github.com/cgohlke/tifffile) for EER decoding.
 

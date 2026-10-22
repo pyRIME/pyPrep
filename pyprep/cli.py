@@ -1,4 +1,4 @@
-"""Command-line interface: ``pyprep scan``, ``run``, ``ctf``, ``deconv``, ``gallery``, ``export``."""
+"""Command-line interface: ``pyprep scan``, ``run``, ``ctf``, ``deconv``, ``redep``, ``gallery``, ``export``."""
 
 from __future__ import annotations
 
@@ -94,6 +94,8 @@ def cmd_run(args) -> int:
         inp.gain_rotate = args.gain_rotate
     if args.gain_flip:
         inp.gain_flip = args.gain_flip
+    if args.invert_y:
+        inp.invert_y = args.invert_y
     r = settings.recon
     if args.reconstruct:
         r.enabled = True
@@ -118,6 +120,13 @@ def cmd_run(args) -> int:
         r.deconv_strength = args.deconv_strength
     if args.deconv_falloff is not None:
         r.deconv_falloff = args.deconv_falloff
+    if args.remove_redeposition:
+        from .redep import astra_status
+        ok, msg = astra_status()
+        if not ok:
+            print(f"--remove-redeposition: {msg}")
+            return 1
+        r.remove_redeposition = True
 
     series = _collect(args.inputs, args.recursive, settings.frames_dir, settings.default_dose)
     if not series:
@@ -218,6 +227,32 @@ def cmd_deconv(args) -> int:
     return 0
 
 
+def cmd_redep(args) -> int:
+    """Redeposition removal in an existing reconstruction folder (``imod_bin<N>``); records it in its
+    pyprep_recon.json like a run with --remove-redeposition."""
+    import json
+    from . import redep
+    recon_dir = Path(args.recon_dir)
+    root = args.root or next((p.stem for p in recon_dir.glob("*.edf")), None)
+    if root is None or not (recon_dir / f"{root}_ali.mrc").exists():
+        print(f"No aligned stack <root>_ali.mrc in {recon_dir}; give --root")
+        return 1
+    try:
+        r = redep.remove_redeposition(recon_dir, root, print)
+    except RuntimeError as e:
+        print(f"Redeposition removal failed: {e}")
+        return 1
+    j = recon_dir / "pyprep_recon.json"
+    try:
+        rec = json.loads(j.read_text())
+    except (OSError, ValueError):
+        rec = {}
+    rec["redeposition"], rec["redep_tomogram"] = r, r["tomogram"]
+    j.write_text(json.dumps(rec, indent=1))
+    print(f"{root}: {Path(r['tomogram']).name} ({r['seconds']:.0f} s)")
+    return 0
+
+
 def cmd_export(args) -> int:
     from .export import export_tiff
     out = export_tiff(args.input, args.output, bin_factor=args.bin, bits=16 if args.bits16 else 8,
@@ -272,6 +307,9 @@ def main(argv=None) -> int:
     p.add_argument("--gain-mode", choices=["auto", "multiply", "divide"])
     p.add_argument("--gain-rotate", type=int, choices=[0, 90, 180, 270], help="rotate gain CCW (degrees)")
     p.add_argument("--gain-flip", choices=["none", "x", "y"], help="flip gain after rotation")
+    p.add_argument("--invert-y", choices=["auto", "yes", "no"],
+                   help="invert the aligned images in Y; auto (default): for Tomography 5 data, which stores "
+                        "images upside down (without it, Tomo5 tomograms are mirror images)")
     p.add_argument("--align-bin", type=int, help="binning used for measuring shifts (default 4)")
     p.add_argument("--bfactor", type=float, help="B-factor for alignment in A^2 (default 500)")
     p.add_argument("--cpu", action="store_true", help="do not use the GPU")
@@ -285,11 +323,14 @@ def main(argv=None) -> int:
     add_ctf_args(p)
     p.add_argument("--no-ctf-correct", action="store_true", help="do not phase-flip (IMOD ctfphaseflip)")
     p.add_argument("--handedness", choices=["auto", "keep", "flip"],
-                   help="auto (default): rotate the tilt axis by 180 deg when the CTF shows inverted "
-                        "handedness; keep: as recorded; flip: always rotate")
+                   help="tilt axis direction. auto (default): rotate it by 180 deg when the CTF defocus "
+                        "gradient disagrees with it; keep: as recorded; flip: always rotate")
     p.add_argument("--no-deconv", action="store_true", help="do not write a deconvolved tomogram")
     p.add_argument("--deconv-strength", type=float, help="deconvolution strength (default 1.0)")
     p.add_argument("--deconv-falloff", type=float, help="deconvolution SNR falloff (default 1.0)")
+    p.add_argument("--remove-redeposition", action="store_true",
+                   help="also write a tomogram with the dense surface layers (FIB redeposition, Pt/GIS grains) "
+                        "removed, <series>_rec_redep.mrc (needs ASTRA: pip install astra-toolbox)")
     p.add_argument("--force", action="store_true", help="reprocess series that are already complete")
     p.add_argument("-q", "--quiet", action="store_true")
     p.set_defaults(func=cmd_run)
@@ -330,6 +371,11 @@ def main(argv=None) -> int:
     p.add_argument("--phase-flipped", action="store_true", help="the tilt series was CTF phase-flipped")
     p.add_argument("--cpu", action="store_true", help="do not use the GPU")
     p.set_defaults(func=cmd_deconv)
+
+    p = sub.add_parser("redep", help="remove redeposition in an existing reconstruction folder (needs ASTRA)")
+    p.add_argument("recon_dir", help="the series' reconstruction folder (imod_bin4)")
+    p.add_argument("--root", help="root name of the etomo project (default: from its .edf)")
+    p.set_defaults(func=cmd_redep)
 
     args = ap.parse_args(argv)
     return args.func(args)

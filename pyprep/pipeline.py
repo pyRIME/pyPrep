@@ -86,7 +86,15 @@ def estimate_output_bytes(series: TiltSeries, settings: ProcessingSettings) -> i
         thick = max(r.thickness_nm, r.positioning_thickness_nm) * 10 / (series.pixel_size * b)
         volume = (nx // b) * (ny // b) * thick * 4
         total += 4 * stack + (4 if r.deconvolve else 3) * volume   # stacks; full/trimmed/trial(/deconvolved)
+        if r.remove_redeposition:                                  # cleaned stack, transmission, tomogram,
+            work = (nx // b) * (ny // b) * redep_work_px(series, b) * 2            # and the int16 working WBP
+            total += 2 * stack + volume + work
     return int(total)
+
+
+def redep_work_px(series: TiltSeries, b: int) -> int:
+    from .redep import WORK_THICKNESS_NM
+    return int(round(WORK_THICKNESS_NM * 10 / (series.pixel_size * b)))
 
 
 def result_json_path(series: TiltSeries, out_dir: Path) -> Path:
@@ -106,6 +114,9 @@ def is_complete(series: TiltSeries, settings: ProcessingSettings, out_root: Path
         return False
     if "used_tilts" in info and sorted(info["used_tilts"]) != used_tilt_ids(series, settings):
         return False                      # tilts were excluded/included since: rebuild
+    old, new = frame_of_record(info, series), image_frame(series, settings)
+    if bool(old["invert_y"]) != new["invert_y"] or abs(normalize_angle(old["tilt_axis"] - new["tilt_axis"])) > 0.01:
+        return False                      # other orientation or axis (Tomo5 stacks from before): rebuild, CTF too
     return all(p.path.exists() for p in planned_outputs(series, settings, out_dir))
 
 
@@ -234,11 +245,11 @@ def _record_qc(record: dict, log) -> None:
         log.info("QC: no tilts flagged")
 
 
-def _fit_ctf(collector, series: TiltSeries, out_dir: Path, device, log) -> dict | None:
-    """Fit the collected spectra, write <name>.defocus / _ctf.npz, log a summary."""
+def _fit_ctf(collector, series: TiltSeries, out_dir: Path, device, log, axis: float) -> dict | None:
+    """Fit the collected spectra, write <name>.defocus / _ctf.npz, log a summary.
+    ``axis``: tilt axis in the frame of the collected images (see ``image_frame``)."""
     try:
         t0 = time.perf_counter()
-        axis = series.tilt_axis if series.tilt_axis is not None else 0.0
         res = ctf.fit_series(collector, axis, series.voltage, device, log.info)
         rec = ctf.save_result(res, out_dir, series.name)
         d = res.defocus_um
@@ -297,7 +308,7 @@ def ensure_ctf(series: TiltSeries, settings: ProcessingSettings, out_root, log_c
                 return None
             sec = mrc.read_sections(stack, z, 1, header=h)[0].astype(np.float32)
             col.add(torch.from_numpy(sec).to(device), angles[z])
-        rec = _fit_ctf(col, series, out_dir, device, log)
+        rec = _fit_ctf(col, series, out_dir, device, log, frame_of_record(info, series)["tilt_axis"])
     finally:
         _close_logger(log)
     if rec is not None:
@@ -344,18 +355,84 @@ def deconvolve_series(series: TiltSeries, settings: ProcessingSettings, out_root
     return rec
 
 
+def remove_redeposition_series(series: TiltSeries, settings: ProcessingSettings, out_root, rec: dict,
+                               log_callback=None, cancel: threading.Event | None = None) -> dict | None:
+    """Redeposition-removed copy of the series' tomogram (``<series>_rec_redep.mrc``, see redep.py); updates
+    ``rec``. A failure (no ASTRA, no lamella found) is logged and recorded, never fatal."""
+    from . import redep
+    recon_dir = Path(rec.get("recon_dir") or "")
+    if not (recon_dir / "tilt.com").is_file():
+        return None
+    out_dir = Path(out_root) / series.name
+    log = _series_logger(out_dir / f"{series.name}_pyprep.log", log_callback, mode="a")
+    try:
+        r = redep.remove_redeposition(recon_dir, series.name, log.info, cancel)
+        rec["redeposition"] = r
+        rec["redep_tomogram"] = r["tomogram"]
+        log.info(f"Redeposition removal done ({r['seconds']:.0f} s): {Path(r['tomogram']).name}")
+    except Exception as e:
+        log.warning(f"Redeposition removal failed: {e}")
+        rec["redeposition"] = {"status": "failed", "error": f"{type(e).__name__}: {e}"}
+        rec.pop("redep_tomogram", None)
+    finally:
+        _close_logger(log)
+    return rec
+
+
 def normalize_angle(a: float) -> float:
     """Angle in degrees wrapped to [-180, 180)."""
     return (float(a) + 180.0) % 360.0 - 180.0
 
 
+TOMO5_INVERT_Y = ("Tomography 5 stores images inverted in Y relative to IMOD's convention (IMOD reports its "
+                  "stacks as 'inverted in Y'); checked by subtomogram averaging of 70S ribosomes")
+
+
+def image_frame(series: TiltSeries, settings: ProcessingSettings) -> dict:
+    """Orientation of the images pyPrep writes, and the tilt axis in that frame.
+
+    Tomography 5 stores images upside down (inverted in Y) and records the tilt axis
+    for them as stored (``RotationAngle``; its header ``TiltAxisAngle`` is the same axis
+    for the upright image, measured from X). Used as stored, the CTF defocus gradient
+    looks inverted, and the tomogram comes out as a mirror image whether or not the
+    axis is then rotated by 180 deg: the rotation makes the gradient agree but keeps
+    the mirror. Inverting the images in Y restores the physical orientation, in which
+    IMOD's conventions hold: the recorded axis, mirrored with them, agrees with the
+    gradient and the hand is right (verified on C. difficile lamellae, Krios/K3/
+    Tomography 5.27, with 70S ribosomes: subtomogram averaging and template matching
+    against EMD-50855; the CTF check passes without rotating the axis)."""
+    mode = settings.input.invert_y
+    recorded = series.tilt_axis if series.tilt_axis is not None else 0.0
+    if mode == "yes":
+        inv, reason = True, "images inverted in Y (setting: yes)"
+    elif mode == "no":
+        inv, reason = False, "images as stored (setting: no)"
+    elif series.mdoc.is_tomo5:
+        inv, reason = True, "images inverted in Y: " + TOMO5_INVERT_Y
+    else:
+        inv, reason = False, "images as stored (SerialEM convention)"
+    # IMOD measures the tilt axis angle from the Y axis, so a Y flip maps it to 180 - a
+    axis = normalize_angle(180.0 - recorded) if inv else recorded
+    return {"invert_y": inv, "tilt_axis": round(float(axis), 2), "recorded_tilt_axis": round(float(recorded), 2),
+            "reason": reason}
+
+
+def frame_of_record(info: dict, series: TiltSeries) -> dict:
+    """Image frame a series record's stacks were written in (older records: as stored)."""
+    if info.get("image_frame"):
+        return info["image_frame"]
+    recorded = series.tilt_axis if series.tilt_axis is not None else 0.0
+    return {"invert_y": False, "tilt_axis": recorded, "recorded_tilt_axis": recorded, "reason": "images as stored"}
+
+
 def handedness_decision(mode: str, ctf_rec: dict | None) -> tuple[bool, str]:
     """(rotate the tilt axis by 180 deg?, reason) for the handedness setting and CTF record.
 
-    A defocus gradient opposite to IMOD's convention means the reconstruction
-    would be a mirror image (IMOD ctfplotter/ctfphaseflip documentation);
-    rotating the tilt axis by 180 deg makes both the gradient and the
-    handedness right."""
+    The CTF check makes the tilt axis direction agree with the defocus gradient of the
+    images as written (IMOD's convention), which ctfphaseflip needs. It fixes a 180 deg
+    error in the recorded axis. It cannot see images that were stored mirrored: those
+    reconstruct as a mirror image with a consistent gradient. That is handled before,
+    by the image orientation (see ``image_frame``)."""
     if mode == "flip":
         return True, "tilt axis rotated by 180 deg (setting: always flip)"
     if mode == "keep":
@@ -398,9 +475,12 @@ def sync_handedness(series: TiltSeries, settings: ProcessingSettings, out_root, 
     except (OSError, ValueError):
         return None
     flip, reason = handedness_decision(settings.recon.handedness, info.get("ctf"))
-    recorded = series.tilt_axis if series.tilt_axis is not None else 0.0
-    axis = normalize_angle(recorded + 180.0) if flip else recorded
-    h = {"flipped": flip, "tilt_axis": round(axis, 2), "recorded_tilt_axis": round(recorded, 2), "reason": reason}
+    frame = frame_of_record(info, series)
+    base = frame["tilt_axis"]                                   # axis of the stacks as written
+    axis = normalize_angle(base + 180.0) if flip else base
+    h = {"flipped": flip, "tilt_axis": round(axis, 2), "stack_tilt_axis": round(base, 2),
+         "recorded_tilt_axis": round(frame["recorded_tilt_axis"], 2), "invert_y": bool(frame["invert_y"]),
+         "reason": reason}
     if info.get("handedness") != h:
         for o in info.get("outputs", []):
             p = Path(o["path"])
@@ -418,8 +498,9 @@ def write_rawtlt(path: Path, angles) -> None:
 
 
 def build_stack_mdoc(series: TiltSeries, tilts, out: StackOutput, nx: int, ny: int, mode: int,
-                     stats: list) -> Mdoc:
-    """SerialEM-style mdoc whose ZValues follow the output stack order."""
+                     stats: list, axis: float) -> Mdoc:
+    """SerialEM-style mdoc whose ZValues follow the output stack order; ``axis`` is the
+    tilt axis of the stack as written (see ``image_frame``)."""
     ps = series.pixel_size * out.bin
     doc = Mdoc(path=None)
     doc.header = {"PixelSpacing": f"{ps:.4f}", "Voltage": f"{series.voltage:.2f}",
@@ -430,7 +511,6 @@ def build_stack_mdoc(series: TiltSeries, tilts, out: StackOutput, nx: int, ny: i
     doc.titles.append(f"{PYPREP_TAG} {__version__} {time.strftime('%d-%b-%y %H:%M')}: {kind_text} "
                       f"from {series.mdoc_path.name}")
     spot = series.tilts[0].section.get("SpotSize", "0") if series.tilts else "0"
-    axis = series.tilt_axis if series.tilt_axis is not None else 0.0
     # This title format is what IMOD looks for to pick up the tilt axis angle.
     doc.titles.append(f"    Tilt axis angle = {axis:.2f}, binning = {out.bin}  spot = {spot}  camera = 0")
     for z, (t, st) in enumerate(zip(tilts, stats)):
@@ -461,17 +541,21 @@ def process_series(series: TiltSeries, settings: ProcessingSettings, out_root: s
     o = settings.output
     ms = settings.motion
     device = gpu.select_device(settings.use_gpu, settings.gpu_id)
+    frame = image_frame(series, settings)
     record = {"pyprep_version": __version__, "series": series.name, "mdoc": str(series.mdoc_path),
               "frames_dir": str(series.frames_dir) if series.frames_dir else None,
               "settings": settings.to_dict(), "device": gpu.device_summary(device),
               "host": platform.node(), "started": time.strftime("%Y-%m-%d %H:%M:%S"),
-              "status": "running", "tilts": [], "outputs": []}
+              "status": "running", "image_frame": frame, "tilts": [], "outputs": []}
     writers: dict = {}
     try:
         _apply_exclusions(series, o.exclude_angles)
         tilts = series.usable
         log.info(series.summary())
         log.info(f"Device: {gpu.device_summary(device)}")
+        log.info("Image orientation: " + frame["reason"]
+                 + (f"; tilt axis {frame['recorded_tilt_axis']:.2f} -> {frame['tilt_axis']:.2f} deg"
+                    if frame["invert_y"] else ""))
         for t in series.missing:
             log.warning(f"MISSING fraction file for tilt {t.zvalue + 1:03d} ({t.angle:+.2f} deg): "
                         f"{t.section.get('SubFramePath', '?')} - left out of the stack")
@@ -540,6 +624,8 @@ def process_series(series: TiltSeries, settings: ProcessingSettings, out_root: s
                                      frame_doses=t.doses_for(len(frames), frame_counts),
                                      prior_dose=t.prior_dose, voltage_kv=series.voltage, gain=ctx.gain,
                                      layout=layout, to_numpy=False)
+                if frame["invert_y"]:     # rows reversed: stacks, CTF and everything after see the physical view
+                    imgs = {k: torch.flip(v, dims=(-2,)) for k, v in imgs.items()}
                 host = {}
                 for key in writers:
                     kind, b = key
@@ -588,7 +674,8 @@ def process_series(series: TiltSeries, settings: ProcessingSettings, out_root: s
         for out in outputs:
             write_rawtlt(out.path.with_suffix(".rawtlt"), angles)
             w = writers[(out.kind, out.bin)]
-            doc = build_stack_mdoc(series, tilts, out, w.nx, w.ny, w.mode, stats[(out.kind, out.bin)])
+            doc = build_stack_mdoc(series, tilts, out, w.nx, w.ny, w.mode, stats[(out.kind, out.bin)],
+                                   frame["tilt_axis"])
             write_mdoc(doc, out.path.with_name(out.path.name + ".mdoc"))
             record["outputs"].append({"kind": out.kind, "bin": out.bin, "path": str(out.path),
                                       "pixel_size": series.pixel_size * out.bin,
@@ -599,7 +686,7 @@ def process_series(series: TiltSeries, settings: ProcessingSettings, out_root: s
             cw.writerows(motion_rows)
         _record_qc(record, log)
         if collector is not None and len(collector.spectra) == len(tilts):
-            record["ctf"] = _fit_ctf(collector, series, out_dir, device, log)
+            record["ctf"] = _fit_ctf(collector, series, out_dir, device, log, frame["tilt_axis"])
         record["used_tilts"] = sorted(t.zvalue for t in tilts)
         record["missing"] = [{"acquisition": t.zvalue, "angle": t.angle,
                               "file": t.section.get("SubFramePath")} for t in series.missing]
@@ -640,12 +727,14 @@ def recon_complete(series: TiltSeries, settings: ProcessingSettings, out_root) -
     if "used_tilts" in rec and sorted(rec["used_tilts"]) != used_tilt_ids(series, settings):
         return False
     try:
-        want = (json.loads(result_json_path(series, Path(out_root) / series.name).read_text())
-                .get("handedness") or {}).get("flipped", False)
+        info = json.loads(result_json_path(series, Path(out_root) / series.name).read_text())
     except (OSError, ValueError):
-        want = False
+        info = {}
+    want = (info.get("handedness") or {}).get("flipped", False)
     if bool(rec.get("handedness_flipped", False)) != bool(want):
         return False                      # handedness decision changed: reconstruct again
+    if bool(rec.get("invert_y", False)) != bool(frame_of_record(info, series)["invert_y"]):
+        return False                      # stacks rewritten in the other image orientation: reconstruct again
     return (rec.get("status") == "complete" and rec.get("preset") == settings.recon.preset
             and rec.get("tomogram") and Path(rec["tomogram"]).exists())
 
@@ -679,18 +768,23 @@ def reconstruct_series(series: TiltSeries, settings: ProcessingSettings, out_roo
         progress(0, total_steps, "IMOD setup")
         hand = sync_handedness(series, settings, out_root) or {}
         flipped = bool(hand.get("flipped"))
-        axis = hand.get("tilt_axis", series.tilt_axis if series.tilt_axis is not None else 0.0)
         try:
-            ctf_rec = json.loads(result_json_path(series, out_dir).read_text()).get("ctf")
+            info = json.loads(result_json_path(series, out_dir).read_text())
         except (OSError, ValueError):
-            ctf_rec = None
+            info = {}
+        frame = frame_of_record(info, series)
+        axis = hand.get("tilt_axis", frame["tilt_axis"])
+        ctf_rec = info.get("ctf")
         if ctf_rec and flipped:
             ctf_rec = dict(ctf_rec, handedness=-ctf_rec.get("handedness", 1))   # relative to the rotated axis
+        if frame["invert_y"]:
+            log.info("Image orientation: " + frame["reason"])
         if hand.get("reason"):
             log.info("Handedness: " + hand["reason"] + f" (tilt axis {axis:.2f} deg)")
         rec = imod.reconstruct(out_dir, series.name, stack, series.pixel_size * b, axis,
                                series.voltage, settings.recon, log=on_line, cancel=cancel, ctf=ctf_rec)
         rec["handedness_flipped"] = flipped
+        rec["invert_y"] = bool(frame["invert_y"])
     except Exception as e:
         log.exception(f"Reconstruction FAILED: {e}")
         rec = {"status": "failed", "error": f"{type(e).__name__}: {e}", "preset": settings.recon.preset}
@@ -699,6 +793,13 @@ def reconstruct_series(series: TiltSeries, settings: ProcessingSettings, out_roo
     if rec["status"] == "complete" and settings.recon.deconvolve:
         progress(-1, total_steps, "Deconvolving the tomogram")
         deconvolve_series(series, settings, out_root, rec, log_callback)
+        try:
+            (Path(rec["recon_dir"]) / "pyprep_recon.json").write_text(json.dumps(rec, indent=1))
+        except OSError:
+            pass
+    if rec["status"] == "complete" and settings.recon.remove_redeposition:
+        progress(-1, total_steps, "Removing redeposition")
+        remove_redeposition_series(series, settings, out_root, rec, log_callback, cancel)
         try:
             (Path(rec["recon_dir"]) / "pyprep_recon.json").write_text(json.dumps(rec, indent=1))
         except OSError:
@@ -729,14 +830,32 @@ def _ensure_deconvolved(series: TiltSeries, settings: ProcessingSettings, out_ro
     if rec.get("deconvolved") and Path(rec["deconvolved"]).exists():
         return
     if deconvolve_series(series, settings, out_root, rec, log_callback) is not None:
-        j.write_text(json.dumps(rec, indent=1))
-        sj = result_json_path(series, Path(out_root) / series.name)
-        try:
-            info = json.loads(sj.read_text())
-            info["reconstruction"] = {k: v for k, v in rec.items() if k != "directives"}
-            sj.write_text(json.dumps(info, indent=1))
-        except (OSError, ValueError):
-            pass
+        _save_recon_record(series, out_root, j, rec)
+
+
+def _ensure_redeposition_removed(series: TiltSeries, settings: ProcessingSettings, out_root, log_callback=None,
+                                 cancel: threading.Event | None = None) -> None:
+    j = recon_dir_for(series, settings, out_root) / "pyprep_recon.json"
+    try:
+        rec = json.loads(j.read_text())
+    except (OSError, ValueError):
+        return
+    if rec.get("redep_tomogram") and Path(rec["redep_tomogram"]).exists():
+        return
+    if remove_redeposition_series(series, settings, out_root, rec, log_callback, cancel) is not None:
+        _save_recon_record(series, out_root, j, rec)
+
+
+def _save_recon_record(series: TiltSeries, out_root, j: Path, rec: dict) -> None:
+    """Write the reconstruction record and keep the series record in sync (Results page)."""
+    j.write_text(json.dumps(rec, indent=1))
+    sj = result_json_path(series, Path(out_root) / series.name)
+    try:
+        info = json.loads(sj.read_text())
+        info["reconstruction"] = {k: v for k, v in rec.items() if k != "directives"}
+        sj.write_text(json.dumps(info, indent=1))
+    except (OSError, ValueError):
+        pass
 
 
 def run_series(series: TiltSeries, settings: ProcessingSettings, out_root,
@@ -768,6 +887,8 @@ def run_series(series: TiltSeries, settings: ProcessingSettings, out_root,
             result["recon"] = "skipped"
             if settings.recon.deconvolve:
                 _ensure_deconvolved(series, settings, out_root, log_callback)
+            if settings.recon.remove_redeposition:
+                _ensure_redeposition_removed(series, settings, out_root, log_callback, cancel)
         else:
             result["recon"] = reconstruct_series(series, settings, out_root, progress, cancel,
                                                  log_callback)["status"]
